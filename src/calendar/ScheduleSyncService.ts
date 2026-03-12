@@ -123,40 +123,45 @@ export class ScheduleSyncService {
       courseMap.set(cur.id, cur.nameShort || cur.name || '');
     }
 
-    // Fetch location + attendees in parallel for all events
-    const enriched = await Promise.all(
-      events.map(async (ev): Promise<EnrichedEvent> => {
-        const [location, attendees] = await Promise.all([
-          this.modeus.getEventLocation(ev.id).catch(() => ({})),
-          this.modeus.getEventAttendees(ev.id).catch(() => []),
-        ]);
+    // Fetch location + attendees with limited concurrency (5 events at a time)
+    // to avoid rate-limiting on the Modeus API.
+    const enriched = await pMap(events, async (ev): Promise<EnrichedEvent> => {
+      const [location, attendees] = await Promise.all([
+        fetchWithRetry(() => this.modeus.getEventLocation(ev.id), 3).catch((err: unknown) => {
+          // 404 = no room assigned — expected. Anything else — log.
+          if (!String(err).includes('404')) {
+            console.warn(`[Sync] getEventLocation(${ev.id}) failed: ${String(err)}`);
+          }
+          return {};
+        }),
+        fetchWithRetry(() => this.modeus.getEventAttendees(ev.id), 3).catch(() => []),
+      ]);
 
-        // Resolve course name from _links → course-unit-realization href
-        let courseName: string | null = null;
-        const curHref = ev._links?.['course-unit-realization']?.href;
-        if (curHref) {
-          // href like "/schedule-calendar-v2/api/calendar/course-unit-realizations/UUID"
-          const curId = curHref.split('/').pop();
-          if (curId) courseName = courseMap.get(curId) ?? null;
-        }
+      // Resolve course name from _links → course-unit-realization href
+      let courseName: string | null = null;
+      const curHref = ev._links?.['course-unit-realization']?.href;
+      if (curHref) {
+        // href like "/schedule-calendar-v2/api/calendar/course-unit-realizations/UUID"
+        const curId = curHref.split('/').pop();
+        if (curId) courseName = courseMap.get(curId) ?? null;
+      }
 
-        return {
-          event: {
-            id:           ev.id,
-            name:         ev.name,
-            typeId:       ev.typeId,
-            startsAtLocal: ev.startsAtLocal,
-            endsAtLocal:   ev.endsAtLocal,
-          },
-          courseName,
-          // sequence and lastModified are filled in after fetching, below
-          sequence:     0,
-          lastModified: new Date().toISOString(),
-          location:  location  as EnrichedEvent['location'],
-          attendees: (attendees as EnrichedEvent['attendees']),
-        };
-      }),
-    );
+      return {
+        event: {
+          id:           ev.id,
+          name:         ev.name,
+          typeId:       ev.typeId,
+          startsAtLocal: ev.startsAtLocal,
+          endsAtLocal:   ev.endsAtLocal,
+        },
+        courseName,
+        // sequence and lastModified are filled in after fetching, below
+        sequence:     0,
+        lastModified: new Date().toISOString(),
+        location:  location  as EnrichedEvent['location'],
+        attendees: (attendees as EnrichedEvent['attendees']),
+      };
+    }, 5);
 
     // ── Per-event sequence tracking ──────────────────────────────────────────
     // Hash each event individually (without sequence/lastModified fields so
@@ -186,4 +191,52 @@ export class ScheduleSyncService {
 
 function computeHash(events: EnrichedEvent[]): string {
   return createHash('sha256').update(JSON.stringify(events)).digest('hex');
+}
+
+// ─── Concurrency helpers ──────────────────────────────────────────────────────
+
+/**
+ * Like Promise.all but processes at most `concurrency` items simultaneously.
+ */
+async function pMap<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+  concurrency: number,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length) as R[];
+  let idx = 0;
+
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await fn(items[i]!);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
+/**
+ * Retries an async function up to `attempts` times on failure,
+ * with exponential back-off (500 ms, 1000 ms, 2000 ms, …).
+ */
+async function fetchWithRetry<T>(
+  fn: () => Promise<T>,
+  attempts: number,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      lastErr = err;
+      // Don't retry 404 — room is genuinely not assigned
+      if (String(err).includes('404')) throw err;
+      if (i < attempts - 1) {
+        await new Promise(r => setTimeout(r, 500 * Math.pow(2, i)));
+      }
+    }
+  }
+  throw lastErr;
 }
