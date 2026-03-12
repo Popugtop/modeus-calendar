@@ -4,13 +4,18 @@ import type {
   ApplyModuleBody,
   ApplyModuleResponse,
   CancelModuleBody,
+  EventAttendee,
   EventDetails,
+  EventLocation,
   ModulesResponse,
   PerformanceResponse,
+  Person,
+  PersonSearchResponse,
   PersonsResponse,
   ScheduleRequestBody,
   ScheduleResponse,
   SelectionsResponse,
+  StudentInfo,
 } from '../types';
 import type { ModeusAuthService } from '../auth/ModeusAuthService';
 
@@ -49,10 +54,42 @@ export class ModeusService {
    */
   async getSchedule(body: ScheduleRequestBody): Promise<ScheduleResponse> {
     const res = await this.client.post<ScheduleResponse>(
-      '/schedule-app/api/schedule',
+      `/schedule-calendar-v2/api/calendar/events/search?tz=Asia%2FTyumen`,
       body,
     );
     this.assertOk(res.status, 'getSchedule');
+    return res.data;
+  }
+
+  /**
+   * Поиск людей по ФИО (или части).
+   * Возвращает persons + students с информацией о специальности.
+   */
+  async searchPersons(fullName: string, size = 10): Promise<{ persons: Person[]; students: StudentInfo[] }> {
+    const res = await this.client.post<PersonSearchResponse>(
+      '/schedule-calendar-v2/api/people/persons/search',
+      { fullName, sort: '+fullName', size, page: 0 },
+    );
+    this.assertOk(res.status, 'searchPersons');
+    return {
+      persons:  res.data._embedded?.persons  ?? [],
+      students: res.data._embedded?.students ?? [],
+    };
+  }
+
+  async getEventLocation(eventId: string): Promise<EventLocation> {
+    const res = await this.client.get<EventLocation>(
+      `/schedule-calendar-v2/api/calendar/events/${eventId}/location`,
+    );
+    this.assertOk(res.status, 'getEventLocation');
+    return res.data;
+  }
+
+  async getEventAttendees(eventId: string): Promise<EventAttendee[]> {
+    const res = await this.client.get<EventAttendee[]>(
+      `/schedule-calendar-v2/api/calendar/events/${eventId}/attendees`,
+    );
+    this.assertOk(res.status, 'getEventAttendees');
     return res.data;
   }
 

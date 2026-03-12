@@ -45,20 +45,21 @@ const MANUAL = {
 };
 
 export class ModeusAuthService {
-  public bearerToken: string | null = null;  // access_token (UUID)
-  public idToken:     string | null = null;  // id_token (JWT, содержит person_id)
+  public bearerToken: string | null = null;
+  public idToken:     string | null = null;
+
+  public get cookieJar(): CookieJar { return this.jar; }
 
   private readonly jar:  CookieJar;
   private readonly http: AxiosInstance;
   private readonly username: string;
   private readonly password: string;
 
-  constructor(username: string, password: string) {
+  constructor(username: string, password: string, jar?: CookieJar) {
     this.username = username;
     this.password = password;
 
-    // CookieJar сохраняет все Set-Cookie по всем доменам (adfs + auth + modeus)
-    this.jar = new CookieJar();
+    this.jar = jar ?? new CookieJar();
 
     this.http = wrapper(
       axios.create({
@@ -92,12 +93,17 @@ export class ModeusAuthService {
         withCredentials: true,
         baseURL: MODEUS_ORIGIN,
         headers: {
+          // Некоторые эндпоинты принимают Bearer, некоторые только куки.
+          // Отправляем оба варианта — лишнее сервер проигнорирует.
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
+          Accept: 'application/json, text/plain, */*',
+          Origin: MODEUS_ORIGIN,
+          Referer: `${MODEUS_ORIGIN}/`,
           'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ' +
             'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-            'Chrome/124.0.0.0 Safari/537.36',
+            'Chrome/145.0.0.0 Safari/537.36',
         },
         validateStatus: (s) => s < 500,
       }),

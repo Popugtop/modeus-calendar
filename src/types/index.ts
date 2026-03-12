@@ -2,28 +2,80 @@
 
 export interface ScheduleRequestBody {
   size: number;
-  timeMin: string; // ISO-8601, e.g. "2024-09-01T00:00:00+05:00"
+  timeMin: string; // ISO-8601 UTC, e.g. "2026-03-08T19:00:00Z"
   timeMax: string;
-  attendeePersonId: string[]; // UUID массив студентов
+  attendeePersonId: string[];
 }
 
 export interface ScheduleEvent {
   id: string;
   name: string;
   nameShort?: string;
-  startDateLocal: string;
-  endDateLocal: string;
-  holdingStatus?: string;
-  format?: string;
-  locationId?: string;
-  locationName?: string;
+  typeId?: string;        // "LECT" | "SEMI" | "LAB" | "CUR_CHECK" | ...
+  start: string;
+  end: string;
+  startsAtLocal: string;  // "2026-03-10T21:00:00" — без зоны
+  endsAtLocal: string;
+  holdingStatus?: { id: string; name: string } | null;
+  _links?: Record<string, { href: string }>;
+  [key: string]: unknown;
 }
 
 export interface ScheduleResponse {
-  total: number;
-  data: {
-    events: Record<string, ScheduleEvent>;
+  _embedded: { events: ScheduleEvent[] };
+}
+
+// ─── Person search ───────────────────────────────────────────────────────────
+
+export interface PersonSearchBody {
+  fullName: string;
+  sort: string;
+  size: number;
+  page: number;
+}
+
+export interface Person {
+  id: string;
+  fullName: string;
+  lastName: string;
+  firstName: string;
+  middleName?: string | null;
+}
+
+export interface StudentInfo {
+  id: string;
+  personId: string;
+  specialtyName?: string;
+  specialtyProfile?: string;
+  flowCode?: string;
+}
+
+export interface PersonSearchResponse {
+  _embedded: {
+    persons: Person[];
+    students: StudentInfo[];
   };
+}
+
+// Детали события — загружаются отдельными запросами
+export interface EventLocation {
+  customLocation?: string;        // онлайн / произвольный зал
+  _embedded?: {
+    rooms?: Array<{
+      id: string;
+      name: string;
+      building?: { id: string; name: string };
+    }>;
+  };
+}
+
+export interface EventAttendee {
+  id: string;
+  roleId: string;         // "STUDENT" | "TEACH"
+  fullName: string;
+  lastName: string;
+  firstName: string;
+  middleName?: string | null;
 }
 
 // ─── Event details ────────────────────────────────────────────────────────────
