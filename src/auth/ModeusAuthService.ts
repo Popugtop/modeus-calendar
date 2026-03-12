@@ -2,42 +2,54 @@ import axios, { AxiosInstance } from 'axios';
 import { wrapper } from 'axios-cookiejar-support';
 import { CookieJar } from 'tough-cookie';
 import * as cheerio from 'cheerio';
+import { randomBytes } from 'crypto';
 
 /**
- * SSO-флоу TюмГУ (fs.utmn.ru → utmn.modeus.org):
+ * Реальный SSO-флоу utmn.modeus.org (по данным HAR-анализа):
  *
- *  1. GET  https://utmn.modeus.org/
- *         → 302 → fs.utmn.ru/adfs/ls/?...  (ADFS login page)
+ *  Auth-сервер: auth.modeus.org (WSO2 Identity Server, НЕ Keycloak)
+ *  Flow: OAuth2 Implicit (response_type=id_token token)
  *
- *  2. GET  fs.utmn.ru/adfs/ls/?...
- *         → 200  HTML с формой: скрытые поля AuthState, __RequestVerificationToken и т.д.
+ *  1. GET  auth.modeus.org/oauth2/authorize?response_type=id_token+token&client_id=...
+ *          → 302 цепочка → fs.utmn.ru/adfs/ls?SAMLRequest=...  (ADFS login page)
  *
- *  3. POST fs.utmn.ru/adfs/ls/?...
- *         body: UserName + Password + скрытые поля
- *         → 200  HTML с SAMLResponse (форма авто-сабмит)
- *           или цепочка 302 с Set-Cookie
+ *  2. GET  fs.utmn.ru/adfs/ls?SAMLRequest=...
+ *          → 200  HTML-форма с hidden-полями (AuthState, CSRF и т.д.)
  *
- *  4. POST https://utmn.modeus.org/auth/realms/utmn/broker/adfs/endpoint
- *         body: SAMLResponse + RelayState
- *         → 302 → modeus с Set-Cookie: BEARER_TOKEN или аналог
+ *  3. POST fs.utmn.ru/adfs/ls  (UserName + Password + hidden fields)
+ *          → 200  HTML с формой авто-сабмита (SAMLResponse + RelayState)
  *
- *  5. Финальный GET → JSON или HTML, из которого достаём Bearer.
+ *  4. POST https://auth.modeus.org/commonauth  (SAMLResponse + RelayState)
+ *          → 302 → auth.modeus.org/oauth2/authorize?sessionDataKey=...
  *
- * axios-cookiejar-support + CookieJar автоматически сохраняют и отправляют куки
- * на каждом шаге. maxRedirects: 0 позволяет нам вручную управлять редиректами
- * там, где нужно вытащить промежуточные данные.
+ *  5. GET  auth.modeus.org/oauth2/authorize?sessionDataKey=...
+ *          → 302 → redirect_uri#access_token=UUID&id_token=JWT&...
+ *          ↑ СТОП — токен в URL-фрагменте Location заголовка (не тело, не куки)
+ *
+ *  Ключевой момент: после шага 4 мы следим за редиректами ВРУЧНУЮ,
+ *  чтобы поймать Location с фрагментом (#access_token=...) до того,
+ *  как axios уйдёт на SPA и потеряет его.
  */
 
-/** URL первичной точки входа в Modeus, с которой стартует SSO */
-const MODEUS_ORIGIN = 'https://utmn.modeus.org';
-const SSO_ENTRY = `${MODEUS_ORIGIN}/`;
+const AUTH_SERVER     = 'https://auth.modeus.org';
+const OAUTH_AUTH_URL  = `${AUTH_SERVER}/oauth2/authorize`;
+const SAML_AUTH_URL   = `${AUTH_SERVER}/commonauth`;
+const CLIENT_ID       = 'sKir7YQnOUu4G0eCfn3tTxnBfzca';
+const REDIRECT_URI    = 'https://utmn.modeus.org/schedule-calendar/my';
+const MODEUS_ORIGIN   = 'https://utmn.modeus.org';
+
+/** axios-опции для ручного шага редиректа */
+const MANUAL = {
+  maxRedirects: 0,
+  validateStatus: (s: number) => s >= 100 && s < 400,
+};
 
 export class ModeusAuthService {
-  /** Итоговый Bearer-токен; устанавливается после успешного login() */
-  public bearerToken: string | null = null;
+  public bearerToken: string | null = null;  // access_token (UUID)
+  public idToken:     string | null = null;  // id_token (JWT, содержит person_id)
 
-  private readonly jar: CookieJar;
-  private readonly client: AxiosInstance;
+  private readonly jar:  CookieJar;
+  private readonly http: AxiosInstance;
   private readonly username: string;
   private readonly password: string;
 
@@ -45,16 +57,12 @@ export class ModeusAuthService {
     this.username = username;
     this.password = password;
 
-    // CookieJar — хранилище кук, которое tough-cookie автоматически
-    // применяет ко всем запросам через axios-cookiejar-support.
+    // CookieJar сохраняет все Set-Cookie по всем доменам (adfs + auth + modeus)
     this.jar = new CookieJar();
 
-    // wrapper() патчит инстанс axios, добавляя поддержку jar.
-    this.client = wrapper(
+    this.http = wrapper(
       axios.create({
         jar: this.jar,
-        // Следовать редиректам автоматически; куки сохраняются в jar на каждом шаге.
-        maxRedirects: 20,
         withCredentials: true,
         headers: {
           'User-Agent':
@@ -65,111 +73,129 @@ export class ModeusAuthService {
             'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8',
         },
-        // Не бросать исключение на 3xx/4xx — обрабатываем сами там, где нужно.
-        validateStatus: (status) => status < 500,
+        validateStatus: (s) => s < 500,
       }),
     );
   }
 
-  /** Возвращает AxiosInstance с Bearer-токеном для использования в ModeusService */
+  /** Возвращает axios-инстанс с Bearer + CookieJar для ModeusService */
   public getApiClient(): AxiosInstance {
-    if (!this.bearerToken) {
+    // API принимает id_token (JWT), а не access_token (UUID)
+    const token = this.idToken ?? this.bearerToken;
+    if (!token) {
       throw new Error('Не авторизован. Сначала вызовите login().');
     }
+
     return wrapper(
       axios.create({
         jar: this.jar,
         withCredentials: true,
         baseURL: MODEUS_ORIGIN,
         headers: {
-          Authorization: `Bearer ${this.bearerToken}`,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
             'AppleWebKit/537.36 (KHTML, like Gecko) ' +
             'Chrome/124.0.0.0 Safari/537.36',
         },
-        validateStatus: (status) => status < 500,
+        validateStatus: (s) => s < 500,
       }),
     );
   }
 
   /**
-   * Полный SSO-флоу. После успешного выполнения this.bearerToken будет установлен.
+   * Полный флоу: OAuth2 Implicit + SAML ADFS.
+   * После успешного выполнения: this.bearerToken = access_token (UUID)
    */
   public async login(): Promise<void> {
-    // ── Шаг 1: GET стартового URL Modeus ─────────────────────────────────────
-    // axios проследит все 302-редиректы и в итоге вернёт HTML страницы логина ADFS.
-    // CookieJar соберёт все Set-Cookie по пути.
-    console.log('[Auth] Шаг 1: Открываем страницу входа...');
-    const loginPageResponse = await this.client.get(SSO_ENTRY);
-    const loginPageHtml: string = loginPageResponse.data;
+    // nonce — защита от replay-атак, случайная строка
+    const nonce = randomBytes(20).toString('hex');
+    const state = randomBytes(20).toString('hex');
 
-    // Финальный URL после редиректов — нужен для корректного POST
+    // ── Шаг 1: Инициируем OAuth2 Implicit flow ────────────────────────────────
+    // auth.modeus.org получит запрос и сделает SAML AuthnRequest к ADFS.
+    // axios проследует всю 302-цепочку и остановится на HTML-форме ADFS.
+    const oauthUrl = `${OAUTH_AUTH_URL}?${new URLSearchParams({
+      response_type: 'id_token token',
+      client_id:     CLIENT_ID,
+      redirect_uri:  REDIRECT_URI,
+      scope:         'openid',
+      nonce,
+      state,
+    })}`;
+
+    console.log('[Auth] Шаг 1: OAuth2 Implicit → auth.modeus.org → ADFS...');
+    const loginPageRes = await this.http.get(oauthUrl, { maxRedirects: 20 });
+    const loginPageHtml: string = loginPageRes.data;
     const loginActionUrl: string =
-      loginPageResponse.request?.res?.responseUrl ?? SSO_ENTRY;
+      loginPageRes.request?.res?.responseUrl ?? oauthUrl;
 
-    console.log(`[Auth] Страница логина получена: ${loginActionUrl}`);
+    console.log(`[Auth] Страница логина: ${loginActionUrl}`);
 
-    // ── Шаг 2: Парсим скрытые поля формы ─────────────────────────────────────
+    // ── Шаг 2: Парсим hidden-поля ADFS-формы ─────────────────────────────────
     const hiddenFields = this.parseHiddenFields(loginPageHtml);
-    console.log(
-      `[Auth] Шаг 2: Найдено скрытых полей: ${Object.keys(hiddenFields).length}`,
-    );
+    console.log(`[Auth] Шаг 2: Найдено скрытых полей: ${Object.keys(hiddenFields).length}`);
 
-    // ── Шаг 3: POST с кредами + скрытыми полями ───────────────────────────────
-    // ADFS ожидает application/x-www-form-urlencoded.
+    if (Object.keys(hiddenFields).length === 0) {
+      console.error('[Auth] Получен HTML (первые 500 симв.):', loginPageHtml.slice(0, 500));
+      throw new Error(
+        '[Auth] Форма ADFS не найдена. ' +
+        `Финальный URL: ${loginActionUrl}`,
+      );
+    }
+
+    // ── Шаг 3: POST кредeнциалов на ADFS ─────────────────────────────────────
     const formBody = new URLSearchParams({
       ...hiddenFields,
-      UserName: this.username,
-      Password: this.password,
+      UserName:   this.username,
+      Password:   this.password,
       AuthMethod: 'FormsAuthentication',
     });
 
-    console.log('[Auth] Шаг 3: Отправляем логин...');
-    const postResponse = await this.client.post(loginActionUrl, formBody.toString(), {
+    console.log('[Auth] Шаг 3: Отправляем логин/пароль на ADFS...');
+    // Разрешаем ADFS пройти свои внутренние 302-редиректы (пост → confirm → SAMLResponse).
+    // Финальная страница должна содержать SAMLResponse-форму.
+    const credsRes = await this.http.post(loginActionUrl, formBody.toString(), {
+      maxRedirects: 10,
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
 
-    const postHtml: string = postResponse.data;
-    const postFinalUrl: string =
-      postResponse.request?.res?.responseUrl ?? loginActionUrl;
+    const credsHtml: string = typeof credsRes.data === 'string' ? credsRes.data : '';
+    const credsFinalUrl: string = credsRes.request?.res?.responseUrl ?? loginActionUrl;
 
-    // ── Шаг 4: Проверяем результат ────────────────────────────────────────────
-    // Вариант A: ADFS вернул SAMLResponse (форма авто-сабмит → Modeus)
-    if (postHtml.includes('SAMLResponse')) {
-      console.log('[Auth] Шаг 4a: Найден SAMLResponse — отправляем в Modeus...');
-      await this.submitSamlResponse(postHtml);
-      return;
+    // ── Шаг 4: Ищем SAMLResponse в ответе ────────────────────────────────────
+    const samlHtml = await this.findSamlResponse(credsHtml, credsFinalUrl);
+
+    // Парсим SAML-форму
+    const $ = cheerio.load(samlHtml);
+    const samlActionUrl = $('form').attr('action') ?? SAML_AUTH_URL;
+    const samlFields    = this.parseHiddenFields(samlHtml);
+
+    console.log(`[Auth] Шаг 4: Отправляем SAMLResponse → ${samlActionUrl}`);
+    const samlRes = await this.http.post(
+      samlActionUrl,
+      new URLSearchParams(samlFields).toString(),
+      {
+        ...MANUAL,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Referer: 'https://fs.utmn.ru/',
+        },
+      },
+    );
+
+    const samlLocation = samlRes.headers['location'] as string | undefined;
+    if (!samlLocation) {
+      throw new Error(`[Auth] commonauth не вернул Location (HTTP ${samlRes.status}).`);
     }
 
-    // Вариант B: Мы уже на Modeus и токен в URL или в куках
-    const tokenFromUrl = this.extractTokenFromUrl(postFinalUrl);
-    if (tokenFromUrl) {
-      this.bearerToken = tokenFromUrl;
-      console.log('[Auth] Токен извлечён из URL финального редиректа.');
-      return;
-    }
-
-    // Вариант C: Токен в куках (некоторые конфигурации ADFS)
-    const tokenFromCookie = await this.extractTokenFromCookies();
-    if (tokenFromCookie) {
-      this.bearerToken = tokenFromCookie;
-      console.log('[Auth] Токен извлечён из кук.');
-      return;
-    }
-
-    // Вариант D: Токен возвращается JSON'ом при финальном GET /api/auth/current
-    const tokenFromApi = await this.fetchTokenFromApi();
-    if (tokenFromApi) {
-      this.bearerToken = tokenFromApi;
-      console.log('[Auth] Токен получен через /api/auth/current.');
-      return;
-    }
-
-    throw new Error(
-      '[Auth] Не удалось извлечь Bearer-токен. ' +
-      'Проверьте логин/пароль и структуру SSO-флоу.',
+    // ── Шаг 5: Следим за редиректами вручную, ловим фрагмент ─────────────────
+    console.log('[Auth] Шаг 5: Следуем за редиректами до access_token...');
+    return this.followUntilFragment(
+      samlLocation.startsWith('http')
+        ? samlLocation
+        : new URL(samlLocation, AUTH_SERVER).toString(),
     );
   }
 
@@ -178,123 +204,124 @@ export class ModeusAuthService {
   // ────────────────────────────────────────────────────────────────────────────
 
   /**
-   * Парсит все <input type="hidden"> из HTML формы и возвращает объект key→value.
-   * Cheerio позволяет работать с DOM без браузера, как jQuery на сервере.
+   * Ищет SAMLResponse в HTML-ответе после POST кредeнциалов.
+   * ADFS может вернуть его сразу (200) или после одного-двух GET-редиректов.
+   * Если в HTML есть форма входа снова — значит неверный пароль.
+   */
+  private async findSamlResponse(html: string, finalUrl: string): Promise<string> {
+    if (html.includes('SAMLResponse')) {
+      console.log('[Auth] Шаг 4: SAMLResponse найден в ответе.');
+      return html;
+    }
+
+    // Неверный пароль: ADFS вернул форму логина снова
+    if (html.includes('name="Password"') || html.includes('id="passwordInput"')) {
+      throw new Error('[Auth] Неверный логин или пароль.');
+    }
+
+    // ADFS иногда делает ещё один GET после POST (PRG-паттерн).
+    // Пробуем дополнительный GET на финальный URL.
+    if (finalUrl && finalUrl.includes('fs.utmn.ru')) {
+      console.log('[Auth] SAMLResponse не найден сразу, пробуем GET финального URL...');
+      const followRes = await this.http.get(finalUrl, { maxRedirects: 5 });
+      const followHtml: string = typeof followRes.data === 'string' ? followRes.data : '';
+
+      if (followHtml.includes('SAMLResponse')) {
+        return followHtml;
+      }
+
+      if (followHtml.includes('name="Password"') || followHtml.includes('id="passwordInput"')) {
+        throw new Error('[Auth] Неверный логин или пароль.');
+      }
+    }
+
+    throw new Error(
+      `[Auth] SAMLResponse не найден после POST кредeнциалов. ` +
+      `Финальный URL: ${finalUrl}\n` +
+      `HTML (первые 300 симв.): ${html.slice(0, 300)}`,
+    );
+  }
+
+  /**
+   * Вручную следует по 302-цепочке, пока не найдёт #access_token= в Location.
+   *
+   * Это критически важно: HTTP-фрагменты (#...) НЕ отправляются браузером
+   * на сервер, но они ПРИСУТСТВУЮТ в Location-заголовке 302-ответа.
+   * axios с maxRedirects>0 ушёл бы на SPA и потерял фрагмент с токеном.
+   */
+  private async followUntilFragment(startUrl: string, maxSteps = 15): Promise<void> {
+    let url = startUrl;
+
+    for (let i = 0; i < maxSteps; i++) {
+      // Проверяем текущий URL на наличие фрагмента с токеном
+      const tokens = this.extractTokensFromFragment(url);
+      if (tokens) {
+        this.bearerToken = tokens.accessToken;
+        this.idToken     = tokens.idToken;
+        return;
+      }
+
+      const res = await this.http.get(url, MANUAL);
+
+      // Проверяем Location заголовок нового редиректа
+      const location = res.headers['location'] as string | undefined;
+
+      if (!location) {
+        // Нет редиректа — финальный ответ
+        const finalUrl: string = res.request?.res?.responseUrl ?? url;
+        const finalTokens = this.extractTokensFromFragment(finalUrl);
+        if (finalTokens) {
+          this.bearerToken = finalTokens.accessToken;
+          this.idToken     = finalTokens.idToken;
+          return;
+        }
+        throw new Error(`[Auth] Редиректы закончились без токена. URL: ${finalUrl}`);
+      }
+
+      // Абсолютный URL
+      url = location.startsWith('http')
+        ? location
+        : new URL(location, AUTH_SERVER).toString();
+    }
+
+    throw new Error('[Auth] Превышено число шагов редиректа при поиске токена.');
+  }
+
+  /**
+   * Извлекает access_token и id_token из URL-фрагмента вида:
+   * https://utmn.modeus.org/...#access_token=UUID&id_token=JWT&...
+   */
+  private extractTokensFromFragment(
+    url: string,
+  ): { accessToken: string; idToken: string | null } | null {
+    const hashIndex = url.indexOf('#');
+    if (hashIndex === -1) return null;
+
+    const fragment = url.slice(hashIndex + 1);
+    const params   = new URLSearchParams(fragment);
+    const accessToken = params.get('access_token');
+
+    if (!accessToken) return null;
+
+    return {
+      accessToken,
+      idToken: params.get('id_token'),
+    };
+  }
+
+  /**
+   * Парсит все <input type="hidden"> из HTML и возвращает объект {name: value}.
    */
   private parseHiddenFields(html: string): Record<string, string> {
     const $ = cheerio.load(html);
     const fields: Record<string, string> = {};
 
     $('input[type="hidden"]').each((_i, el) => {
-      const name = $(el).attr('name');
+      const name  = $(el).attr('name');
       const value = $(el).attr('value') ?? '';
       if (name) fields[name] = value;
     });
 
     return fields;
-  }
-
-  /**
-   * Шаг 4a: После POST на ADFS мы получаем HTML со скрытой формой,
-   * которая содержит SAMLResponse и RelayState. Браузер авто-сабмитит её.
-   * Мы делаем это вручную через POST на action-URL формы.
-   */
-  private async submitSamlResponse(html: string): Promise<void> {
-    const $ = cheerio.load(html);
-    const form = $('form');
-    const actionUrl = form.attr('action') ?? `${MODEUS_ORIGIN}/auth/realms/utmn/broker/adfs/endpoint`;
-
-    const samlFields = this.parseHiddenFields(html);
-    const samlBody = new URLSearchParams(samlFields);
-
-    console.log(`[Auth] SAML POST → ${actionUrl}`);
-    const samlResponse = await this.client.post(actionUrl, samlBody.toString(), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    });
-
-    const samlFinalUrl: string =
-      samlResponse.request?.res?.responseUrl ?? actionUrl;
-
-    // После SAML-обмена Modeus обычно делает ещё один редирект с токеном в URL
-    const tokenFromUrl = this.extractTokenFromUrl(samlFinalUrl);
-    if (tokenFromUrl) {
-      this.bearerToken = tokenFromUrl;
-      return;
-    }
-
-    // Или кладёт его в куки
-    const tokenFromCookie = await this.extractTokenFromCookies();
-    if (tokenFromCookie) {
-      this.bearerToken = tokenFromCookie;
-      return;
-    }
-
-    // Или JSON в теле ответа (редко, но бывает)
-    if (typeof samlResponse.data === 'object' && samlResponse.data?.token) {
-      this.bearerToken = samlResponse.data.token as string;
-      return;
-    }
-
-    // Последний шанс — дёрнуть /api/auth/current
-    const tokenFromApi = await this.fetchTokenFromApi();
-    if (tokenFromApi) {
-      this.bearerToken = tokenFromApi;
-      return;
-    }
-
-    throw new Error('[Auth] SAML-обмен завершён, но токен не найден.');
-  }
-
-  /**
-   * Некоторые реализации Modeus возвращают JWT в параметре `token` финального URL
-   * вида: https://utmn.modeus.org/#token=eyJ...
-   */
-  private extractTokenFromUrl(url: string): string | null {
-    // Проверяем fragment (#token=...) и query (?token=...)
-    const patterns = [/#token=([^&]+)/, /[?&]token=([^&]+)/];
-    for (const re of patterns) {
-      const match = re.exec(url);
-      if (match?.[1]) return decodeURIComponent(match[1]);
-    }
-    return null;
-  }
-
-  /**
-   * Ищем токен в куках, которые Modeus мог установить как access_token / jwt / bearer.
-   * CookieJar.getcookies() возвращает все куки для домена.
-   */
-  private async extractTokenFromCookies(): Promise<string | null> {
-    const cookies = await this.jar.getCookies(MODEUS_ORIGIN);
-    const tokenCookieNames = ['access_token', 'jwt', 'bearer', 'token', 'id_token'];
-
-    for (const cookie of cookies) {
-      if (tokenCookieNames.includes(cookie.key.toLowerCase())) {
-        return cookie.value;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Финальный запрос: некоторые версии Modeus отдают токен через специальный эндпоинт.
-   * Если он недоступен — просто возвращаем null.
-   */
-  private async fetchTokenFromApi(): Promise<string | null> {
-    try {
-      const res = await this.client.get(`${MODEUS_ORIGIN}/api/auth/current`, {
-        validateStatus: (s) => s < 500,
-      });
-      if (res.status === 200 && res.data?.token) {
-        return res.data.token as string;
-      }
-      // Также проверяем заголовок Authorization в ответе (нестандартно, но встречается)
-      const authHeader = res.headers['authorization'] as string | undefined;
-      if (authHeader?.startsWith('Bearer ')) {
-        return authHeader.slice(7);
-      }
-    } catch {
-      // Эндпоинт не существует — это нормально
-    }
-    return null;
   }
 }
