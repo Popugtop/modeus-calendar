@@ -115,7 +115,12 @@ async function main(): Promise<void> {
 
         const existing = repo.findSubscriptionByPersonId(personId);
 
-        if (!existing && INVITE_REQUIRED) {
+        if (existing) {
+          res.status(409).json({ error: `Пользователь "${personName}" уже зарегистрирован.` });
+          return;
+        }
+
+        if (INVITE_REQUIRED) {
           if (!inviteCode || !repo.isInviteCodeValid(inviteCode)) {
             res.status(403).json({ error: 'Неверный или уже использованный инвайт-код.' });
             return;
@@ -123,19 +128,14 @@ async function main(): Promise<void> {
         }
 
         const sub = repo.createSubscription(personName, personId);
-
-        if (!existing) {
-          if (INVITE_REQUIRED && inviteCode) repo.useInviteCode(inviteCode, personName);
-          void sync.syncOne(sub).catch((err: unknown) =>
-            console.error('[Register] Фоновый sync упал:', err),
-          );
-        }
+        if (INVITE_REQUIRED && inviteCode) repo.useInviteCode(inviteCode, personName);
+        void sync.syncOne(sub).catch((err: unknown) =>
+          console.error('[Register] Фоновый sync упал:', err),
+        );
 
         const feedUrl = `${protocol}://${host}/${sub.calendarToken}`;
-        res.status(existing ? 200 : 201).json({
-          message: existing
-            ? `Подписка уже существует для "${personName}".`
-            : `Подписка создана для "${personName}".`,
+        res.status(201).json({
+          message: `Подписка создана для "${personName}".`,
           token: sub.calendarToken,
           url:   feedUrl,
         });
@@ -181,7 +181,12 @@ async function main(): Promise<void> {
       const person   = persons[0]!;
       const existing = repo.findSubscriptionByPersonId(person.id);
 
-      if (!existing && INVITE_REQUIRED) {
+      if (existing) {
+        res.status(409).json({ error: `Пользователь "${person.fullName}" уже зарегистрирован.` });
+        return;
+      }
+
+      if (INVITE_REQUIRED) {
         if (!inviteCode || !repo.isInviteCodeValid(inviteCode)) {
           res.status(403).json({ error: 'Неверный или уже использованный инвайт-код.' });
           return;
@@ -189,19 +194,14 @@ async function main(): Promise<void> {
       }
 
       const sub = repo.createSubscription(person.fullName, person.id);
-
-      if (!existing) {
-        if (INVITE_REQUIRED && inviteCode) repo.useInviteCode(inviteCode, person.fullName);
-        void sync.syncOne(sub).catch((err: unknown) =>
-          console.error('[Register] Фоновый sync упал:', err),
-        );
-      }
+      if (INVITE_REQUIRED && inviteCode) repo.useInviteCode(inviteCode, person.fullName);
+      void sync.syncOne(sub).catch((err: unknown) =>
+        console.error('[Register] Фоновый sync упал:', err),
+      );
 
       const feedUrl = `${protocol}://${host}/${sub.calendarToken}`;
-      res.status(existing ? 200 : 201).json({
-        message: existing
-          ? `Подписка уже существует для "${person.fullName}".`
-          : `Подписка создана для "${person.fullName}".`,
+      res.status(201).json({
+        message: `Подписка создана для "${person.fullName}".`,
         token: sub.calendarToken,
         url:   feedUrl,
       });

@@ -151,13 +151,34 @@ bot.action(/^invites_p_(\d+)$/, async ctx => {
   if ((page + 1) * PAGE_SIZE < total)
     navButtons.push(Markup.button.callback('▶️', `invites_p_${page + 1}`));
 
+  // Delete buttons for each unused code on this page
+  const deleteButtons = items
+    .filter(c => !c.used)
+    .map(c => [Markup.button.callback(`🗑️ Удалить ${c.code}`, `del_inv_${c.code}`)]);
+
   await ctx.editMessageText(text, {
     parse_mode: 'Markdown',
     ...Markup.inlineKeyboard([
+      ...deleteButtons,
       ...(navButtons.length > 0 ? [navButtons] : []),
       [Markup.button.callback('🎟️ Создать код', 'create_invite')],
       [Markup.button.callback('◀️ Назад', 'back_main')],
     ]),
+  });
+});
+
+// Delete unused invite code
+bot.action(/^del_inv_([0-9A-F]{8})$/, async ctx => {
+  await ctx.answerCbQuery();
+  const code    = (ctx.match as RegExpMatchArray)[1]!;
+  const deleted = repo.deleteInviteCode(code);
+  const notice  = deleted
+    ? `🗑️ Код \`${code}\` удалён.`
+    : `⚠️ Код \`${code}\` не найден или уже использован.`;
+
+  await ctx.editMessageText(notice, {
+    parse_mode: 'Markdown',
+    ...Markup.inlineKeyboard([[Markup.button.callback('🔑 К списку кодов', 'invites_p_0')]]),
   });
 });
 

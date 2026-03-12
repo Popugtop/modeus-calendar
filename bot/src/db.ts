@@ -98,6 +98,13 @@ export class BotRepository {
     return { items, total };
   }
 
+  deleteInviteCode(code: string): boolean {
+    const result = this.db
+      .prepare(`DELETE FROM invite_codes WHERE code = ? AND used = 0`)
+      .run(code);
+    return result.changes > 0;
+  }
+
   listInviteCodes(
     page: number,
     pageSize: number,
