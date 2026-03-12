@@ -1,0 +1,42 @@
+# 📦 Зависимости (Самый главный пожиратель токенов!)
+node_modules/
+jspm_packages/
+
+# 🔒 Автосгенерированные локи (десятки тысяч строк мусора)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
+
+# 🏗 Скомпилированный код (Клод должен читать только твои исходники .ts)
+dist/
+build/
+out/
+.nest/
+
+# 🗄 Базы данных (чтобы он не пытался читать бинарники)
+*.sqlite
+*.sqlite-journal
+*.db
+prisma/*.db
+
+# 📝 Логи и дампы
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.har
+
+# 🔑 Секреты (безопасность превыше всего)
+.env
+.env.local
+.env.production
+*.pem
+*.key
+
+# ⚙️ Системные папки и контроль версий
+.git/
+.vscode/
+.idea/
+.DS_Store

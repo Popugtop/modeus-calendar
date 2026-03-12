@@ -10,8 +10,10 @@ import { CalendarRepository } from './calendar/CalendarRepository';
 import { ScheduleSyncService } from './calendar/ScheduleSyncService';
 import { buildIcs } from './calendar/IcsBuilder';
 
-const PORT    = parseInt(process.env['PORT'] ?? '3000', 10);
-const DB_PATH = process.env['DB_PATH'] ?? './calendar.db';
+const PORT             = parseInt(process.env['PORT'] ?? '3000', 10);
+const DB_PATH          = process.env['DB_PATH'] ?? './calendar.db';
+const INVITE_REQUIRED  = process.env['INVITE_REQUIRED'] !== 'false'; // default true
+const INTERNAL_SECRET  = process.env['INTERNAL_SECRET'] ?? '';
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 
@@ -95,7 +97,53 @@ async function main(): Promise<void> {
   // ── POST /api/calendar/register ──────────────────────────────────────────────
   app.post('/api/calendar/register', registerLimiter, (req: Request, res: Response) => {
     void (async () => {
-      const raw = (req.body as { fio?: unknown }).fio;
+      const body = req.body as {
+        fio?: unknown;
+        inviteCode?: unknown;
+        personId?: unknown;
+        personName?: unknown;
+      };
+
+      const host     = req.headers['host'] ?? `localhost:${PORT}`;
+      const protocol = (req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol;
+
+      // ── Pre-selected person (from multiple-results flow) ──────────────────
+      if (typeof body.personId === 'string' && typeof body.personName === 'string') {
+        const personId   = body.personId.trim();
+        const personName = body.personName.trim();
+        const inviteCode = typeof body.inviteCode === 'string' ? body.inviteCode.trim() : '';
+
+        const existing = repo.findSubscriptionByPersonId(personId);
+
+        if (!existing && INVITE_REQUIRED) {
+          if (!inviteCode || !repo.isInviteCodeValid(inviteCode)) {
+            res.status(403).json({ error: 'Неверный или уже использованный инвайт-код.' });
+            return;
+          }
+        }
+
+        const sub = repo.createSubscription(personName, personId);
+
+        if (!existing) {
+          if (INVITE_REQUIRED && inviteCode) repo.useInviteCode(inviteCode, personName);
+          void sync.syncOne(sub).catch((err: unknown) =>
+            console.error('[Register] Фоновый sync упал:', err),
+          );
+        }
+
+        const feedUrl = `${protocol}://${host}/${sub.calendarToken}`;
+        res.status(existing ? 200 : 201).json({
+          message: existing
+            ? `Подписка уже существует для "${personName}".`
+            : `Подписка создана для "${personName}".`,
+          token: sub.calendarToken,
+          url:   feedUrl,
+        });
+        return;
+      }
+
+      // ── FIO-based search ──────────────────────────────────────────────────
+      const raw = body.fio;
 
       // Type guard — only accept strings
       if (typeof raw !== 'string') {
@@ -110,29 +158,135 @@ async function main(): Promise<void> {
         return;
       }
 
-      const { persons } = await modeus.searchPersons(fio, 5);
+      const inviteCode = typeof body.inviteCode === 'string' ? body.inviteCode.trim() : '';
+
+      const { persons, students } = await modeus.searchPersons(fio, 10);
 
       if (persons.length === 0) {
-        res.status(404).json({ error: `Человек не найден в Modeus.` });
+        res.status(404).json({ error: 'Человек не найден в Modeus.' });
         return;
       }
 
-      const person = persons[0]!;
-      const sub    = repo.createSubscription(person.fullName, person.id);
+      // Multiple results — let user pick (don't validate invite yet)
+      if (persons.length > 1) {
+        const personList = persons.map(p => ({
+          id:           p.id,
+          fullName:     p.fullName,
+          specialtyName: students.find(s => s.personId === p.id)?.specialtyName ?? null,
+        }));
+        res.status(200).json({ status: 'multiple', persons: personList });
+        return;
+      }
 
-      // Sync in background — don't block the response
-      void sync.syncOne(sub).catch((err: unknown) =>
-        console.error('[Register] Фоновый sync упал:', err),
-      );
+      const person   = persons[0]!;
+      const existing = repo.findSubscriptionByPersonId(person.id);
+
+      if (!existing && INVITE_REQUIRED) {
+        if (!inviteCode || !repo.isInviteCodeValid(inviteCode)) {
+          res.status(403).json({ error: 'Неверный или уже использованный инвайт-код.' });
+          return;
+        }
+      }
+
+      const sub = repo.createSubscription(person.fullName, person.id);
+
+      if (!existing) {
+        if (INVITE_REQUIRED && inviteCode) repo.useInviteCode(inviteCode, person.fullName);
+        void sync.syncOne(sub).catch((err: unknown) =>
+          console.error('[Register] Фоновый sync упал:', err),
+        );
+      }
+
+      const feedUrl = `${protocol}://${host}/${sub.calendarToken}`;
+      res.status(existing ? 200 : 201).json({
+        message: existing
+          ? `Подписка уже существует для "${person.fullName}".`
+          : `Подписка создана для "${person.fullName}".`,
+        token: sub.calendarToken,
+        url:   feedUrl,
+      });
+    })();
+  });
+
+  // ── POST /api/internal/register ──────────────────────────────────────────────
+  app.post('/api/internal/register', (req: Request, res: Response) => {
+    void (async () => {
+      const secret = req.headers['x-internal-secret'];
+      if (!secret || secret !== INTERNAL_SECRET) {
+        res.status(403).json({ error: 'Forbidden' });
+        return;
+      }
+
+      const body = req.body as { fio?: string; personId?: string; personName?: string };
 
       const host     = req.headers['host'] ?? `localhost:${PORT}`;
       const protocol = (req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol;
-      const feedUrl  = `${protocol}://${host}/${sub.calendarToken}`;
 
-      res.status(201).json({
-        message: `Подписка создана для "${person.fullName}".`,
-        token:   sub.calendarToken,
-        url:     feedUrl,
+      // Direct registration by personId (from bot person selection)
+      if (body.personId && body.personName) {
+        const existing = repo.findSubscriptionByPersonId(body.personId);
+        const sub = repo.createSubscription(body.personName, body.personId);
+        if (!existing)
+          void sync.syncOne(sub).catch((e: unknown) =>
+            console.error('[Internal] sync failed:', e),
+          );
+
+        const feedUrl = `${protocol}://${host}/${sub.calendarToken}`;
+        res.status(existing ? 200 : 201).json({
+          message: existing
+            ? `Подписка уже существует для "${body.personName}".`
+            : `Подписка создана для "${body.personName}".`,
+          token: sub.calendarToken,
+          url:   feedUrl,
+        });
+        return;
+      }
+
+      // Search by FIO
+      if (!body.fio || typeof body.fio !== 'string') {
+        res.status(400).json({ error: 'Укажите fio или personId+personName.' });
+        return;
+      }
+
+      const fio = body.fio.trim();
+      const validationError = validateFio(fio);
+      if (validationError) {
+        res.status(400).json({ error: validationError });
+        return;
+      }
+
+      const { persons, students } = await modeus.searchPersons(fio, 10);
+
+      if (persons.length === 0) {
+        res.status(404).json({ error: 'Человек не найден в Modeus.' });
+        return;
+      }
+
+      if (persons.length > 1) {
+        const personList = persons.map(p => ({
+          id:            p.id,
+          fullName:      p.fullName,
+          specialtyName: students.find(s => s.personId === p.id)?.specialtyName ?? null,
+        }));
+        res.status(200).json({ status: 'multiple', persons: personList });
+        return;
+      }
+
+      const person   = persons[0]!;
+      const existing = repo.findSubscriptionByPersonId(person.id);
+      const sub      = repo.createSubscription(person.fullName, person.id);
+      if (!existing)
+        void sync.syncOne(sub).catch((e: unknown) =>
+          console.error('[Internal] sync failed:', e),
+        );
+
+      const feedUrl = `${protocol}://${host}/${sub.calendarToken}`;
+      res.status(existing ? 200 : 201).json({
+        message: existing
+          ? `Подписка уже существует для "${person.fullName}".`
+          : `Подписка создана для "${person.fullName}".`,
+        token: sub.calendarToken,
+        url:   feedUrl,
       });
     })();
   });

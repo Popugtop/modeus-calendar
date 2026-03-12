@@ -20,6 +20,23 @@ interface CacheRow {
   updated_at: string;
 }
 
+interface InviteCodeRow {
+  id: number;
+  code: string;
+  used: number;
+  used_by_fio: string | null;
+  created_at: string;
+  used_at: string | null;
+}
+
+export interface InviteCodeInfo {
+  code: string;
+  used: boolean;
+  usedByFio: string | null;
+  createdAt: string;
+  usedAt: string | null;
+}
+
 // ─── Repository ───────────────────────────────────────────────────────────────
 
 export class CalendarRepository {
@@ -48,6 +65,15 @@ export class CalendarRepository {
         schedule_hash   TEXT    NOT NULL,
         updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
         UNIQUE(subscription_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS invite_codes (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        code             TEXT    NOT NULL UNIQUE,
+        used             INTEGER NOT NULL DEFAULT 0,
+        used_by_fio      TEXT,
+        created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+        used_at          TEXT
       );
     `);
   }
@@ -151,6 +177,75 @@ export class CalendarRepository {
     }
   }
 
+  // ─── Invite codes ───────────────────────────────────────────────────────────
+
+  createInviteCode(): string {
+    const code = randomBytes(4).toString('hex').toUpperCase();
+    this.db.prepare(`INSERT INTO invite_codes (code) VALUES (?)`).run(code);
+    return code;
+  }
+
+  isInviteCodeValid(code: string): boolean {
+    const row = this.db.prepare<[string], { id: number }>(
+      `SELECT id FROM invite_codes WHERE code = ? AND used = 0`,
+    ).get(code);
+    return !!row;
+  }
+
+  useInviteCode(code: string, usedByFio: string): void {
+    this.db
+      .prepare(
+        `UPDATE invite_codes SET used = 1, used_by_fio = ?, used_at = datetime('now') WHERE code = ?`,
+      )
+      .run(usedByFio, code);
+  }
+
+  listInviteCodes(limit = 10, offset = 0): InviteCodeInfo[] {
+    return this.db
+      .prepare<[number, number], InviteCodeRow>(
+        `SELECT * FROM invite_codes ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      )
+      .all(limit, offset)
+      .map(mapInviteRow);
+  }
+
+  countInviteCodes(): number {
+    return (
+      this.db
+        .prepare<[], { count: number }>(`SELECT COUNT(*) as count FROM invite_codes`)
+        .get()?.count ?? 0
+    );
+  }
+
+  getStats(): {
+    users: number;
+    totalCodes: number;
+    usedCodes: number;
+    recentUsers: { fio: string; createdAt: string }[];
+  } {
+    const users =
+      this.db
+        .prepare<[], { count: number }>(`SELECT COUNT(*) as count FROM subscriptions`)
+        .get()?.count ?? 0;
+    const totalCodes =
+      this.db
+        .prepare<[], { count: number }>(`SELECT COUNT(*) as count FROM invite_codes`)
+        .get()?.count ?? 0;
+    const usedCodes =
+      this.db
+        .prepare<[], { count: number }>(
+          `SELECT COUNT(*) as count FROM invite_codes WHERE used = 1`,
+        )
+        .get()?.count ?? 0;
+    const recentUsers = this.db
+      .prepare<[], SubscriptionRow>(
+        `SELECT * FROM subscriptions ORDER BY created_at DESC LIMIT 5`,
+      )
+      .all()
+      .map(r => ({ fio: r.fio, createdAt: r.created_at }));
+    return { users, totalCodes, usedCodes, recentUsers };
+  }
+
   close(): void {
     this.db.close();
   }
@@ -165,5 +260,15 @@ function mapRow(row: SubscriptionRow): Subscription {
     modeusPersonId: row.modeus_person_id,
     calendarToken: row.calendar_token,
     createdAt: row.created_at,
+  };
+}
+
+function mapInviteRow(row: InviteCodeRow): InviteCodeInfo {
+  return {
+    code: row.code,
+    used: row.used === 1,
+    usedByFio: row.used_by_fio,
+    createdAt: row.created_at,
+    usedAt: row.used_at,
   };
 }

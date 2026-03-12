@@ -4,7 +4,6 @@ import type { EnrichedEvent, Subscription } from './types';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TIMEZONE = 'Asia/Yekaterinburg'; // Tyumen = UTC+5, permanent (no DST since 2014)
-const TZ_OFFSET = '+05:00';
 const MODEUS_ORIGIN = 'https://utmn.modeus.org';
 
 const TYPE_NAMES: Record<string, string> = {
@@ -37,8 +36,8 @@ export function buildIcs(
     const { event, location, attendees } = enriched;
 
     // ── Dates (startsAtLocal is already in Yekaterinburg time, no TZ suffix) ──
-    const start = new Date(event.startsAtLocal + TZ_OFFSET);
-    const end   = new Date(event.endsAtLocal   + TZ_OFFSET);
+    const start = parseLocalDt(event.startsAtLocal);
+    const end   = parseLocalDt(event.endsAtLocal);
 
     // ── Location ──────────────────────────────────────────────────────────────
     // ICS format: "Главный корпус / 210"  (building first, then room number)
@@ -83,12 +82,16 @@ export function buildIcs(
     const subjectCode = extractSubjectCode(event.name);
 
     // ── Build event ───────────────────────────────────────────────────────────
+    // start/end are bare local datetime strings (no TZ suffix).
+    // ical-generator parses them with new Date() on a UTC server → local getters
+    // equal UTC getters.  calEvent.timezone() then sets TZID and tells the
+    // formatter to use local (not UTC) getters, so:
+    //   "2026-03-10T08:30:00" → DTSTART;TZID=Asia/Yekaterinburg:20260310T083000
     const calEvent = cal.createEvent({
-      // UID = Modeus event UUID → consistent across refreshes, no duplicates
       id:          event.id,
       start,
       end,
-      summary:     event.name,
+      summary:     formatSummary(event.name),
       description,
       location:    locationStr || undefined,
       organizer:   { name: 'Modeus', email: 'noreply@modeus.org' },
@@ -96,7 +99,6 @@ export function buildIcs(
       categories:  buildCategories(typeName, subjectCode),
     });
 
-    // Apply TZID so output is DTSTART;TZID=Asia/Yekaterinburg:...
     calEvent.timezone(TIMEZONE);
   }
 
@@ -104,6 +106,27 @@ export function buildIcs(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Returns the local datetime string as-is (no TZ suffix).
+ * ical-generator parses it with new Date() on a UTC server → local === UTC,
+ * so .getHours() yields the Tyumen local hour.  calEvent.timezone() then
+ * wraps the output as DTSTART;TZID=Asia/Yekaterinburg:20260310T083000.
+ */
+function parseLocalDt(localStr: string): string {
+  return localStr;
+}
+
+/**
+ * Formats event name: "Course / Topic / Code" → "Course | Topic"
+ */
+function formatSummary(name: string): string {
+  const segments = name.split(' / ');
+  if (segments.length >= 2) {
+    return `${segments[0]!.trim()} | ${segments[1]!.trim()}`;
+  }
+  return name;
+}
 
 /**
  * Builds deep-link URLs for the event, matching the Modeus ICS format:

@@ -2,13 +2,16 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useRef } from 'react';
 import { validateFio } from '../lib/validate';
 import { register } from '../lib/api';
+import type { PersonOption } from '../lib/api';
 
 interface Props {
   onSuccess: (url: string, name: string) => void;
+  onMultiple?: (persons: PersonOption[], fio: string, inviteCode: string) => void;
 }
 
-export default function CalendarForm({ onSuccess }: Props) {
+export default function CalendarForm({ onSuccess, onMultiple }: Props) {
   const [value, setValue] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [touched, setTouched] = useState(false);
@@ -41,8 +44,12 @@ export default function CalendarForm({ onSuccess }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const result = await register(value.trim());
-      onSuccess(result.url, value.trim());
+      const result = await register(value.trim(), inviteCode.trim());
+      if (result.status === 'multiple') {
+        onMultiple?.(result.persons, value.trim(), inviteCode.trim());
+      } else {
+        onSuccess(result.url, value.trim());
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Неизвестная ошибка';
       setError(msg);
@@ -75,8 +82,8 @@ export default function CalendarForm({ onSuccess }: Props) {
         </div>
 
         <form onSubmit={handleSubmit} noValidate>
-          {/* Input group */}
-          <div className="mb-5">
+          {/* FIO input */}
+          <div className="mb-4">
             <label
               htmlFor="fio-input"
               className="block text-sm font-medium text-primary/80 mb-2"
@@ -139,6 +146,34 @@ export default function CalendarForm({ onSuccess }: Props) {
                 </motion.div>
               )}
             </AnimatePresence>
+          </div>
+
+          {/* Invite code input */}
+          <div className="mb-5">
+            <label
+              htmlFor="invite-input"
+              className="block text-sm font-medium text-primary/80 mb-2"
+            >
+              Инвайт-код
+            </label>
+            <input
+              id="invite-input"
+              type="text"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="XXXXXXXX"
+              value={inviteCode}
+              onChange={e => setInviteCode(e.target.value.toUpperCase())}
+              disabled={loading}
+              className={[
+                'w-full px-4 py-3 rounded-xl text-base text-primary placeholder-muted/50',
+                'bg-input-bg border border-border transition-all duration-200',
+                'focus:border-border-focus focus:shadow-glow-accent',
+                'disabled:opacity-50 disabled:cursor-not-allowed',
+                'font-mono tracking-widest',
+              ].join(' ')}
+            />
           </div>
 
           {/* Hint */}

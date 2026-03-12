@@ -2,9 +2,12 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useState } from 'react';
 import CalendarForm from './components/CalendarForm';
 import SuccessCard from './components/SuccessCard';
+import PersonPickerModal from './components/PersonPickerModal';
+import type { PersonOption } from './lib/api';
 
 type State =
   | { stage: 'form' }
+  | { stage: 'selecting'; persons: PersonOption[]; fio: string; inviteCode: string }
   | { stage: 'success'; url: string; name: string };
 
 export default function App() {
@@ -43,11 +46,14 @@ export default function App() {
       <main className="relative z-10 flex-1 flex items-start justify-center px-4 pb-16 pt-2">
         <div className="w-full max-w-md">
           <AnimatePresence mode="wait">
-            {state.stage === 'form' ? (
+            {state.stage === 'form' || state.stage === 'selecting' ? (
               <CalendarForm
                 key="form"
                 onSuccess={(url, name) =>
                   setState({ stage: 'success', url, name })
+                }
+                onMultiple={(persons, fio, inviteCode) =>
+                  setState({ stage: 'selecting', persons, fio, inviteCode })
                 }
               />
             ) : (
@@ -61,6 +67,17 @@ export default function App() {
           </AnimatePresence>
         </div>
       </main>
+
+      {/* Person picker modal (rendered outside AnimatePresence to avoid layout shift) */}
+      {state.stage === 'selecting' && (
+        <PersonPickerModal
+          persons={state.persons}
+          fio={state.fio}
+          inviteCode={state.inviteCode}
+          onSuccess={(url, name) => setState({ stage: 'success', url, name })}
+          onCancel={() => setState({ stage: 'form' })}
+        />
+      )}
 
       {/* Footer */}
       <footer className="relative z-10 text-center pb-6 px-4">

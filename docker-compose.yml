@@ -11,13 +11,26 @@ services:
       - calendar-data:/app/data
     networks:
       - internal
-    # Not exposed to host — only reachable by frontend container via internal network
 
   frontend:
     build: ./client
     restart: unless-stopped
     ports:
-      - "3000:80"   # Caddy on host proxies to this port
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - internal
+
+  bot:
+    build: ./bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_PATH: /app/data/calendar.db
+      BACKEND_URL: http://backend:3000
+    volumes:
+      - calendar-data:/app/data
     depends_on:
       - backend
     networks:
