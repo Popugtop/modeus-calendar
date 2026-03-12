@@ -60,10 +60,11 @@ export function buildIcs(
     const typeName = TYPE_NAMES[event.typeId ?? ''] ?? event.typeId ?? 'Занятие';
 
     // ── Description ───────────────────────────────────────────────────────────
-    // Matches Modeus original format:
-    //   "Лекционное занятие\n\nПреподаватель: Иванов И.И.\n\nПосмотреть в ...\n"
-    const deepLink = buildDeepLink(event.id, event.startsAtLocal);
+    const timeRange  = `${fmtTime(event.startsAtLocal)}–${fmtTime(event.endsAtLocal)}`;
+    const deepLink   = buildDeepLink(event.id, event.startsAtLocal);
     const description = [
+      timeRange,
+      '',
       typeName,
       '',
       teachers ? `Преподаватель: ${teachers}` : '',
@@ -117,13 +118,20 @@ function parseLocalDt(localStr: string): string {
   return localStr;
 }
 
+/** Extracts "HH:MM" from "2026-03-10T08:30:00" */
+function fmtTime(localDt: string): string {
+  return localDt.slice(11, 16);
+}
+
 /**
  * Formats event name: "Course / Topic / Code" → "Course | Topic"
+ * Handles both " / " and "/" as delimiters.
  */
 function formatSummary(name: string): string {
-  const segments = name.split(' / ');
+  // Normalise: collapse any spacing around "/" to a single " / "
+  const segments = name.split('/').map(s => s.trim()).filter(Boolean);
   if (segments.length >= 2) {
-    return `${segments[0]!.trim()} | ${segments[1]!.trim()}`;
+    return `${segments[0]} | ${segments[1]}`;
   }
   return name;
 }

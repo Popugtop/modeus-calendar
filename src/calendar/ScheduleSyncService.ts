@@ -69,8 +69,16 @@ export class ScheduleSyncService {
     const label = `[Sync:${sub.fio}]`;
     try {
       const enriched = await this.fetchEnrichedEvents(sub.modeusPersonId);
-      const hash     = computeHash(enriched);
-      const updated  = this.repo.saveScheduleCache(sub.id, enriched, hash);
+
+      if (enriched.length > 0) {
+        console.log(
+          `${label} Примеры event.name: ` +
+          enriched.slice(0, 3).map(e => JSON.stringify(e.event.name)).join(', '),
+        );
+      }
+
+      const hash    = computeHash(enriched);
+      const updated = this.repo.saveScheduleCache(sub.id, enriched, hash);
 
       if (updated) {
         console.log(`${label} Кэш обновлён (${enriched.length} событий).`);
