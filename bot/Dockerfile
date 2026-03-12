@@ -1,0 +1,23 @@
+# Stage 1: install deps with native build tools
+FROM node:22-alpine AS deps
+WORKDIR /app
+RUN apk add --no-cache python3 make g++
+COPY package*.json ./
+RUN npm ci
+
+# Stage 2: build TypeScript
+FROM node:22-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN npx tsc
+
+# Stage 3: production image
+FROM node:22-alpine AS runner
+WORKDIR /app
+RUN apk add --no-cache python3 make g++
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY --from=builder /app/dist ./dist
+
+CMD ["node", "dist/index.js"]
