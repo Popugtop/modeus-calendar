@@ -5,10 +5,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "start:server": "node dist/server.js",
-    "dev": "npx ts-node src/index.ts",
-    "dev:server": "npx ts-node src/server.ts",
+    "start": "node dist/server.js",
+    "dev": "npx ts-node src/server.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
