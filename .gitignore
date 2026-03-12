@@ -1,5 +1,33 @@
+# Dependencies
 node_modules/
+client/node_modules/
+
+# Build output
 dist/
+client/dist/
+
+# Environment & secrets
 .env
 .tokens.json
+
+# SQLite database
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# TypeScript
 *.js.map
+*.tsbuildinfo

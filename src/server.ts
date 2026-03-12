@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import path from 'path';
 import express, { type Request, type Response } from 'express';
 import { ModeusAuthService } from './auth/ModeusAuthService';
 import { ModeusService } from './api/ModeusService';
@@ -44,6 +45,10 @@ async function main(): Promise<void> {
 
   const app = express();
   app.use(express.json());
+
+  // ── Статика фронтенда (React build) ──────────────────────────────────────────
+  const clientDist = path.join(__dirname, '../client/dist');
+  app.use(express.static(clientDist));
 
   // ── POST /api/calendar/register ──────────────────────────────────────────────
   //
@@ -95,16 +100,11 @@ async function main(): Promise<void> {
     })();
   });
 
-  // ── GET /:token  (and legacy /feed/:token.ics) ────────────────────────────────
+  // ── GET /<token>[.ics] ────────────────────────────────────────────────────────
   //
-  // Serves the ICS feed for a given calendar token.
-  // Data is read from the local cache; no Modeus API calls on this path.
-  // Apple Calendar / Google Calendar poll this URL automatically.
-  //
-  // Supported URL formats:
-  //   calendar.popugtop.dev/<token>         ← primary (short)
-  //   calendar.popugtop.dev/<token>.ics     ← also accepted (some clients append .ics)
-  //   calendar.popugtop.dev/feed/<token>.ics ← legacy
+  // Tokens are 48-char hex strings (randomBytes(24).toString('hex')).
+  // Using a regex prevents this route from matching /api, /assets, etc.
+  // Supports: /<token>  and  /<token>.ics  (some calendar clients append .ics)
 
   function serveIcs(token: string, res: Response): void {
     const sub = repo.findSubscriptionByToken(token);
@@ -112,27 +112,25 @@ async function main(): Promise<void> {
       res.status(404).send('Subscription not found');
       return;
     }
-
     const events = repo.getScheduleCache(sub.id);
     if (!events) {
       res.status(503).send('Schedule not yet synced, try again in a few seconds');
       return;
     }
-
     const ics = buildIcs(sub, events);
     res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
     res.setHeader('Content-Disposition', `inline; filename="schedule-${token.slice(0, 8)}.ics"`);
     res.send(ics);
   }
 
-  app.get('/:token', (req: Request, res: Response) => {
-    const raw = Array.isArray(req.params.token) ? req.params.token[0] : req.params.token;
-    serveIcs(raw?.replace(/\.ics$/i, '') ?? '', res);
+  // Matches /abcdef0123...  (48 hex chars, optionally followed by .ics)
+  app.get(/^\/([0-9a-f]{48})(\.ics)?$/i, (req: Request, res: Response) => {
+    serveIcs((req.params as unknown as string[])[0] ?? '', res);
   });
 
-  app.get('/feed/:file', (req: Request, res: Response) => {
-    const raw = Array.isArray(req.params.file) ? req.params.file[0] : req.params.file;
-    serveIcs(raw?.replace(/\.ics$/i, '') ?? '', res);
+  // ── SPA fallback — все остальные пути отдают index.html ──────────────────────
+  app.get('*', (_req: Request, res: Response) => {
+    res.sendFile(path.join(clientDist, 'index.html'));
   });
 
   // ─── Start ───────────────────────────────────────────────────────────────────
@@ -142,7 +140,7 @@ async function main(): Promise<void> {
   app.listen(PORT, () => {
     console.log(`[Server] Слушает http://localhost:${PORT}`);
     console.log(`[Server] POST /api/calendar/register — создать подписку`);
-    console.log(`[Server] GET  /feed/<token>.ics      — ICS-фид`);
+    console.log(`[Server] GET  /<48-hex-token>[.ics]  — ICS-фид`);
   });
 }
 

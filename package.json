@@ -4,9 +4,10 @@
   "description": "Modeus (utmn.ru) API client with SSO authentication",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/server.js",
     "dev": "npx ts-node src/server.ts",
+    "dev:client": "cd client && npm run dev",
+    "build": "tsc && cd client && npm run build",
+    "start": "node dist/server.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

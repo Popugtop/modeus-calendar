@@ -2,32 +2,69 @@
 
 Сервис подписки на расписание ТюмГУ в формате iCalendar.
 
-Пользователь вводит ФИО → получает ссылку → добавляет в Apple Calendar / Google Calendar → расписание обновляется автоматически.
+Пользователь вводит ФИО на веб-странице → получает личную ссылку → добавляет в Apple Calendar или Google Calendar → расписание обновляется автоматически каждые 3 часа.
 
 ---
 
-## Быстрый старт (локально)
+## Содержание
+
+1. [Структура проекта](#структура-проекта)
+2. [Локальный запуск](#локальный-запуск)
+3. [Деплой на сервер (Caddy)](#деплой-на-сервер)
+4. [API](#api)
+5. [Как работает авторизация](#как-работает-авторизация)
+6. [Возможные проблемы](#возможные-проблемы)
+
+---
+
+## Структура проекта
+
+```
+client/                          # React-фронтенд (Vite + Tailwind + Framer Motion)
+  src/
+    components/
+      CalendarForm.tsx            # Форма ввода ФИО с валидацией
+      SuccessCard.tsx             # Экран успеха со ссылкой и инструкцией
+    lib/
+      api.ts                      # Запрос к /api/calendar/register
+      validate.ts                 # Валидация ФИО (кириллица, 3 слова)
+    App.tsx                       # Роутинг между form / success
+
+src/
+  auth/
+    ModeusAuthService.ts          # SSO-авторизация (OAuth2 + SAML)
+    tokenCache.ts                 # Кэш токенов в .tokens.json
+  api/
+    ModeusService.ts              # Методы API Modeus
+  calendar/
+    CalendarRepository.ts         # SQLite: подписки + кэш расписания
+    IcsBuilder.ts                 # Генерация ICS через ical-generator
+    ScheduleSyncService.ts        # Cron: фоновая синхронизация
+    types.ts
+  types/
+    index.ts                      # TypeScript-интерфейсы
+  server.ts                       # Express: API + раздача фронтенда
+```
+
+---
+
+## Локальный запуск
+
+### Требования
+
+- Node.js >= 18
+
+### Установка
 
 ```bash
 git clone <repo-url>
 cd modeus-bot
 npm install
 cp .env.example .env
-# заполни .env (см. ниже)
-npm run dev
+# заполнить .env
 ```
 
-Сервер запустится на `http://localhost:3000`.
-
----
-
-## Переменные окружения
-
-Скопируй шаблон и заполни:
-
-```bash
-cp .env.example .env
-```
+### Переменные окружения
 
 ```env
 # Логин от аккаунта utmn.modeus.org
@@ -40,44 +77,32 @@ PORT=3000
 # Путь к SQLite-базе
 DB_PATH=./calendar.db
 
-# Как часто синхронизировать расписание (cron, по умолчанию каждые 3 часа)
+# Расписание синхронизации (cron, по умолчанию каждые 3 часа)
 CRON_SCHEDULE=0 */3 * * *
 
 # Сколько недель вперёд загружать
 SYNC_WEEKS_AHEAD=4
 ```
 
----
+### Запуск
 
-## API
+```bash
+# Backend (сервер + API)
+npm run dev
 
-### Создать подписку
-
-```
-POST /api/calendar/register
-Content-Type: application/json
-
-{ "fio": "Иванов Иван Иванович" }
+# Frontend (Vite dev-сервер с hot reload, в отдельном терминале)
+npm run dev:client
 ```
 
-Ответ:
+Фронтенд открывается на `http://localhost:5173`, запросы к `/api` проксируются на `localhost:3000`.
 
-```json
-{
-  "message": "Подписка создана для \"Иванов Иван Иванович\".",
-  "token": "a3f8c2d1e4b59f7a...",
-  "url": "https://calendar.popugtop.dev/a3f8c2d1e4b59f7a..."
-}
+### Сборка для продакшна
+
+```bash
+npm run build
+# Собирает TypeScript → dist/ и React → client/dist/
+# После этого npm start раздаёт и API, и фронтенд на одном порту
 ```
-
-### Получить ICS-фид
-
-```
-GET /<token>
-```
-
-Возвращает `text/calendar` — этот URL добавляется в календарное приложение.
-Подождите 10–30 секунд после регистрации пока пройдёт первая синхронизация.
 
 ---
 
@@ -140,8 +165,9 @@ git clone https://github.com/ВАШ_ЛОГИН/modeus-bot.git /root/app
 **Через rsync (с локальной машины):**
 ```bash
 rsync -av \
-  --exclude='node_modules' --exclude='.tokens.json' \
-  --exclude='calendar.db' --exclude='.env' \
+  --exclude='node_modules' --exclude='client/node_modules' \
+  --exclude='dist' --exclude='client/dist' \
+  --exclude='.tokens.json' --exclude='calendar.db' --exclude='.env' \
   /Users/popugtop/Code/modeus-bot/ root@<IP>:/root/app/
 ```
 
@@ -151,7 +177,12 @@ rsync -av \
 
 ```bash
 cd /root/app
+
+# Установить зависимости (бэкенд + фронтенд)
 npm install
+cd client && npm install && cd ..
+
+# Собрать всё (TypeScript + React)
 npm run build
 ```
 
@@ -160,7 +191,6 @@ npm run build
 nano /root/app/.env
 ```
 
-Вставь и заполни (аналогично локальному, порт оставь 3000):
 ```env
 MODEUS_USERNAME=ivanov.ii@s.utmn.ru
 MODEUS_PASSWORD=ВашПароль
@@ -186,7 +216,7 @@ cd /root/app
 pm2 start dist/server.js --name modeus-calendar
 pm2 save
 
-# Настроить автозапуск при перезагрузке сервера:
+# Автозапуск при перезагрузке сервера
 pm2 startup
 # ↑ выведет команду вида "sudo env PATH=..." — скопируй и выполни её
 ```
@@ -195,7 +225,7 @@ pm2 startup
 
 ### 6. Настройка Caddy
 
-Caddy сам получает и обновляет SSL-сертификаты через Let's Encrypt — никаких certbot и ручных продлений.
+Caddy автоматически получает и обновляет SSL-сертификаты. Никаких certbot, никаких ручных продлений.
 
 ```bash
 nano /etc/caddy/Caddyfile
@@ -209,7 +239,7 @@ calendar.popugtop.dev {
 }
 ```
 
-Перезапусти Caddy:
+Перезапусти:
 
 ```bash
 systemctl reload caddy
@@ -218,38 +248,19 @@ systemctl reload caddy
 Через 10–20 секунд сертификат выпустится автоматически. Проверь:
 
 ```bash
-curl -I https://calendar.popugtop.dev/api/calendar/register
-# HTTP/2 405  ← нормально (GET на POST-эндпоинт)
+curl -I https://calendar.popugtop.dev
+# HTTP/2 200  ← фронтенд отвечает
 ```
 
 ---
 
-### 7. Создать первую подписку
-
-```bash
-curl -X POST https://calendar.popugtop.dev/api/calendar/register \
-  -H "Content-Type: application/json" \
-  -d '{"fio": "Иванов Иван Иванович"}'
-```
-
-Подожди 10–30 секунд и открой полученный `url` в браузере — скачается `.ics` файл.
-
----
-
-### 8. Добавить в Apple Calendar
-
-**Mac:** Календарь → Файл → Новая подписка на календарь → вставь ссылку → Интервал обновления: Каждый час
-
-**iPhone:** Настройки → Календарь → Аккаунты → Добавить аккаунт → Другое → Добавить подписной календарь → вставь ссылку
-
----
-
-### Обновление кода
+### 7. Обновление кода
 
 ```bash
 cd /root/app
-git pull                    # или rsync с локальной машины
+git pull
 npm install
+cd client && npm install && cd ..
 npm run build
 pm2 restart modeus-calendar
 ```
@@ -260,9 +271,12 @@ pm2 restart modeus-calendar
 
 ```bash
 pm2 logs modeus-calendar --lines 50   # логи приложения
-journalctl -u caddy -n 50             # логи caddy
-ss -tlnp | grep 3000                  # убедиться что Node.js слушает порт
-curl https://calendar.popugtop.dev/<token> | head -3  # должно быть BEGIN:VCALENDAR
+journalctl -u caddy -n 50             # логи Caddy
+ss -tlnp | grep 3000                  # Node.js слушает порт
+
+# Проверить ICS вручную (подставь реальный токен из БД)
+curl https://calendar.popugtop.dev/<token> | head -5
+# Должно начинаться с: BEGIN:VCALENDAR
 ```
 
 ---
@@ -270,18 +284,49 @@ curl https://calendar.popugtop.dev/<token> | head -3  # должно быть BE
 ### Архитектура
 
 ```
-Apple Calendar (опрос каждый час)
-        │ GET https://calendar.popugtop.dev/<token>
+Браузер / Apple Calendar / Google Calendar
+        │
         ▼
     Caddy :443  (автоSSL, reverse proxy)
         │
-    Node.js :3000  (pm2)
+    Node.js :3000  (pm2, автозапуск)
         │
-    SQLite (calendar.db)
+        ├── GET /           → client/dist/index.html  (React SPA)
+        ├── POST /api/...   → Express API
+        ├── GET /<token>    → ICS из SQLite (без API-вызовов)
+        │
+    SQLite calendar.db
         │
     ScheduleSyncService (cron 0 */3 * * *)
         └──→ Modeus API (utmn.modeus.org)
 ```
+
+---
+
+## API
+
+### `POST /api/calendar/register`
+
+Создать подписку по ФИО.
+
+```bash
+curl -X POST https://calendar.popugtop.dev/api/calendar/register \
+  -H "Content-Type: application/json" \
+  -d '{"fio": "Иванов Иван Иванович"}'
+```
+
+```json
+{
+  "message": "Подписка создана для \"Иванов Иван Иванович\".",
+  "token": "a3f8c2d1e4b59f7a...",
+  "url": "https://calendar.popugtop.dev/a3f8c2d1e4b59f7a..."
+}
+```
+
+### `GET /<token>`
+
+Отдаёт ICS-файл. Этот URL добавляется в календарное приложение.
+Данные берутся из локального кэша — Modeus API не вызывается.
 
 ---
 
@@ -298,7 +343,7 @@ POST auth.modeus.org/commonauth  { SAMLResponse }
       → redirect → ...#id_token=JWT&access_token=UUID
 ```
 
-Токены и куки кэшируются в `.tokens.json`. Время жизни ~24 часа. При истечении — удали `.tokens.json` и перезапусти.
+Токены и куки кэшируются в `.tokens.json`. Время жизни ~24 часа. При истечении — удали `.tokens.json` и перезапусти сервер.
 
 ---
 
@@ -308,10 +353,17 @@ POST auth.modeus.org/commonauth  { SAMLResponse }
 Токен истёк. Удали `.tokens.json` и перезапусти: `pm2 restart modeus-calendar`
 
 **`503` при открытии ICS-ссылки**
-Первая синхронизация ещё не завершилась. Подожди 30 секунд и обнови страницу.
+Первая синхронизация ещё не завершилась. Подожди 30 секунд и попробуй снова.
 
 **`Человек не найден в Modeus`**
-Попробуй с фамилией и инициалами (`Иванов И.И.`) или только с фамилией.
+Попробуй только фамилию или сокращённый вариант ФИО.
 
 **Caddy не получает сертификат**
-Убедись что порт 80 и 443 открыты в firewall (`ufw allow 80 && ufw allow 443`) и DNS уже указывает на сервер.
+Убедись что порты 80 и 443 открыты в firewall:
+```bash
+ufw allow 80 && ufw allow 443
+```
+И что DNS уже указывает на сервер (`nslookup calendar.popugtop.dev`).
+
+**Фронтенд не открывается после `npm start`**
+Убедись что перед запуском была выполнена полная сборка (`npm run build`), включая `client/dist/`.
