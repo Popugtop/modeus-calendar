@@ -1,0 +1,11 @@
+node_modules/
+dist/
+client/
+.env
+.tokens.json
+*.db
+*.db-shm
+*.db-wal
+.git/
+*.log
+.DS_Store

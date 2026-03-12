@@ -142,7 +142,13 @@ export class CalendarRepository {
 
     if (!row) return null;
 
-    return JSON.parse(row.events_json) as EnrichedEvent[];
+    try {
+      return JSON.parse(row.events_json) as EnrichedEvent[];
+    } catch {
+      console.error(`[CalendarRepository] Corrupt cache for subscription ${subscriptionId}, clearing.`);
+      this.db.prepare(`DELETE FROM schedule_cache WHERE subscription_id = ?`).run(subscriptionId);
+      return null;
+    }
   }
 
   close(): void {

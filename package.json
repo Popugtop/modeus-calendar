@@ -17,6 +17,7 @@
     "cheerio": "^1.0.0",
     "dotenv": "^16.4.7",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.3.1",
     "ical-generator": "^10.0.0",
     "node-cron": "^4.2.1",
     "tough-cookie": "^5.1.0"

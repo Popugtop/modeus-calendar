@@ -119,11 +119,10 @@ function buildDeepLink(
     date: `${startsAtLocal}.000Z`,
   });
 
-  // Modeus uses \, (escaped comma) in the calendar param within ICS descriptions
-  const calParamEscaped = calParam.replace(/,/g, '\\,');
-
+  // Fully percent-encode both params. ical-generator will handle ICS text
+  // escaping of any special characters inside the DESCRIPTION property.
   const eventEnc = encodeURIComponent(eventParam);
-  const calEnc   = encodeURIComponent(calParam).replace(/%2C/g, '\\,');
+  const calEnc   = encodeURIComponent(calParam);
 
   const baseWeb    = `${MODEUS_ORIGIN}/schedule-calendar/my`;
   const baseMobile = `${MODEUS_ORIGIN}/schedule-calendar/mobile`;

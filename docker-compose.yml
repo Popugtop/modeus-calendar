@@ -1,0 +1,30 @@
+services:
+  backend:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_PATH: /app/data/calendar.db
+      PORT: "3000"
+      NODE_ENV: production
+    volumes:
+      - calendar-data:/app/data
+    networks:
+      - internal
+    # Not exposed to host — only reachable by frontend container via internal network
+
+  frontend:
+    build: ./client
+    restart: unless-stopped
+    ports:
+      - "3000:80"   # Caddy on host proxies to this port
+    depends_on:
+      - backend
+    networks:
+      - internal
+
+networks:
+  internal:
+
+volumes:
+  calendar-data:
