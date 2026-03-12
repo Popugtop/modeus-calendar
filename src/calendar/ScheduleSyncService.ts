@@ -71,9 +71,12 @@ export class ScheduleSyncService {
       const enriched = await this.fetchEnrichedEvents(sub.modeusPersonId);
 
       if (enriched.length > 0) {
+        const withRoom    = enriched.filter(e => e.location?._embedded?.rooms?.length).length;
+        const withCustom  = enriched.filter(e => e.location?.customLocation).length;
+        const noLocation  = enriched.length - withRoom - withCustom;
         console.log(
-          `${label} Примеры event.name: ` +
-          enriched.slice(0, 3).map(e => JSON.stringify(e.event.name)).join(', '),
+          `${label} ${enriched.length} событий: ` +
+          `${withRoom} с аудиторией, ${withCustom} с customLocation, ${noLocation} без места.`,
         );
       }
 
@@ -81,7 +84,7 @@ export class ScheduleSyncService {
       const updated = this.repo.saveScheduleCache(sub.id, enriched, hash);
 
       if (updated) {
-        console.log(`${label} Кэш обновлён (${enriched.length} событий).`);
+        console.log(`${label} Кэш обновлён.`);
       } else {
         console.log(`${label} Без изменений.`);
       }
@@ -112,60 +115,115 @@ export class ScheduleSyncService {
       attendeePersonId:   [modeusPersonId],
     });
 
-    const events = (schedule._embedded?.events ?? []).sort(
+    const emb = schedule._embedded;
+
+    const events = (emb?.events ?? []).sort(
       (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime(),
     );
 
-    // Build course-unit-realization ID → name map from the embedded data
+    // ── Build course-unit-realization ID → name map ──────────────────────────
     const courseMap = new Map<string, string>();
-    const curs = schedule._embedded?.['course-unit-realizations'] ?? [];
-    for (const cur of curs) {
+    for (const cur of emb?.['course-unit-realizations'] ?? []) {
       courseMap.set(cur.id, cur.nameShort || cur.name || '');
     }
 
-    // Fetch location + attendees with limited concurrency (5 events at a time)
-    // to avoid rate-limiting on the Modeus API.
-    const enriched = await pMap(events, async (ev): Promise<EnrichedEvent> => {
-      const [location, attendees] = await Promise.all([
-        fetchWithRetry(() => this.modeus.getEventLocation(ev.id), 3).catch((err: unknown) => {
-          // 404 = no room assigned — expected. Anything else — log.
-          if (!String(err).includes('404')) {
-            console.warn(`[Sync] getEventLocation(${ev.id}) failed: ${String(err)}`);
-          }
-          return {};
-        }),
-        fetchWithRetry(() => this.modeus.getEventAttendees(ev.id), 3).catch(() => []),
-      ]);
+    // ── Build rooms map: roomId → { name, building } ─────────────────────────
+    const roomMap = new Map<string, { id: string; name: string; building?: { id: string; name: string } }>();
+    for (const room of emb?.rooms ?? []) {
+      roomMap.set(room.id, {
+        id:       room.id,
+        name:     room.name,
+        building: room.building ? { id: room.building.id, name: room.building.name } : undefined,
+      });
+    }
 
+    // ── Build event-rooms map: eventId → roomId ───────────────────────────────
+    // event-rooms join entries link event UUIDs to room UUIDs.
+    const eventRoomMap = new Map<string, string>(); // eventId → roomId
+    for (const er of emb?.['event-rooms'] ?? []) {
+      const eventId = er._links?.event?.href?.split('/').pop();
+      const roomId  = er._links?.room?.href?.split('/').pop();
+      if (eventId && roomId) eventRoomMap.set(eventId, roomId);
+    }
+
+    // ── Build location map: eventId → EventLocation ──────────────────────────
+    const locationMap = new Map<string, EnrichedEvent['location']>();
+    for (const loc of emb?.['event-locations'] ?? []) {
+      const evId = loc.eventId;
+      if (!evId) continue;
+
+      const customLocation = loc.customLocation ?? undefined;
+
+      // Primary: room from event-rooms join; secondary: event-rooms link on location
+      let rooms: Array<{ id: string; name: string; building?: { id: string; name: string } }> | undefined;
+
+      const roomId = eventRoomMap.get(evId)
+        ?? (() => {
+          const href = (loc._links?.['event-rooms'] as { href?: string } | undefined)?.href;
+          if (!href) return undefined;
+          // href points to the event-room join entry, not the room directly.
+          // We already built eventRoomMap from event-rooms entries above.
+          // If it's not there, skip (shouldn't happen with a well-formed response).
+          return undefined;
+        })();
+
+      if (roomId) {
+        const room = roomMap.get(roomId);
+        if (room) rooms = [room];
+      }
+
+      locationMap.set(evId, {
+        customLocation,
+        _embedded: rooms ? { rooms } : undefined,
+      });
+    }
+
+    // ── Build persons map: personId → fullName ───────────────────────────────
+    const personMap = new Map<string, string>();
+    for (const p of emb?.persons ?? []) {
+      personMap.set(p.id, p.fullName);
+    }
+
+    // ── Build attendees map: eventId → [{roleId, fullName}] ─────────────────
+    const attendeesMap = new Map<string, Array<{ roleId: string; fullName: string }>>();
+    for (const ea of emb?.['event-attendees'] ?? []) {
+      const eventId  = ea._links?.event?.href?.split('/').pop();
+      const personId = ea._links?.person?.href?.split('/').pop();
+      const roleId   = ea.roleId;
+      if (!eventId || !roleId) continue;
+
+      const fullName = personId ? (personMap.get(personId) ?? '') : '';
+      if (!attendeesMap.has(eventId)) attendeesMap.set(eventId, []);
+      attendeesMap.get(eventId)!.push({ roleId, fullName });
+    }
+
+    // ── Assemble enriched events ──────────────────────────────────────────────
+    const enriched: EnrichedEvent[] = events.map(ev => {
       // Resolve course name from _links → course-unit-realization href
       let courseName: string | null = null;
       const curHref = ev._links?.['course-unit-realization']?.href;
       if (curHref) {
-        // href like "/schedule-calendar-v2/api/calendar/course-unit-realizations/UUID"
         const curId = curHref.split('/').pop();
         if (curId) courseName = courseMap.get(curId) ?? null;
       }
 
       return {
         event: {
-          id:           ev.id,
-          name:         ev.name,
-          typeId:       ev.typeId,
+          id:            ev.id,
+          name:          ev.name,
+          typeId:        ev.typeId,
           startsAtLocal: ev.startsAtLocal,
           endsAtLocal:   ev.endsAtLocal,
         },
         courseName,
-        // sequence and lastModified are filled in after fetching, below
         sequence:     0,
         lastModified: new Date().toISOString(),
-        location:  location  as EnrichedEvent['location'],
-        attendees: (attendees as EnrichedEvent['attendees']),
+        location:     locationMap.get(ev.id) ?? {},
+        attendees:    attendeesMap.get(ev.id) ?? [],
       };
-    }, 5);
+    });
 
     // ── Per-event sequence tracking ──────────────────────────────────────────
-    // Hash each event individually (without sequence/lastModified fields so
-    // they don't cause false positives) to detect content changes.
     const seqInput = enriched.map(e => ({
       eventId: e.event.id,
       hash: createHash('sha256')
@@ -191,52 +249,4 @@ export class ScheduleSyncService {
 
 function computeHash(events: EnrichedEvent[]): string {
   return createHash('sha256').update(JSON.stringify(events)).digest('hex');
-}
-
-// ─── Concurrency helpers ──────────────────────────────────────────────────────
-
-/**
- * Like Promise.all but processes at most `concurrency` items simultaneously.
- */
-async function pMap<T, R>(
-  items: T[],
-  fn: (item: T) => Promise<R>,
-  concurrency: number,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length) as R[];
-  let idx = 0;
-
-  async function worker() {
-    while (idx < items.length) {
-      const i = idx++;
-      results[i] = await fn(items[i]!);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-  return results;
-}
-
-/**
- * Retries an async function up to `attempts` times on failure,
- * with exponential back-off (500 ms, 1000 ms, 2000 ms, …).
- */
-async function fetchWithRetry<T>(
-  fn: () => Promise<T>,
-  attempts: number,
-): Promise<T> {
-  let lastErr: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn();
-    } catch (err: unknown) {
-      lastErr = err;
-      // Don't retry 404 — room is genuinely not assigned
-      if (String(err).includes('404')) throw err;
-      if (i < attempts - 1) {
-        await new Promise(r => setTimeout(r, 500 * Math.pow(2, i)));
-      }
-    }
-  }
-  throw lastErr;
 }

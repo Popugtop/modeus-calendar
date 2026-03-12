@@ -27,10 +27,63 @@ export interface CourseUnitRealization {
   name?: string;
 }
 
+/** Event location entry from _embedded['event-locations'] */
+export interface EventLocationEmbedded {
+  eventId: string;
+  customLocation?: string | null;
+  _links?: {
+    'event-rooms'?: { href: string };
+    [key: string]: unknown;
+  };
+}
+
+/** Event-room join entry from _embedded['event-rooms'] */
+export interface EventRoomLink {
+  id: string;
+  _links?: {
+    event?: { href: string };
+    room?: { href: string };
+  };
+}
+
+/** Room detail from _embedded['rooms'] */
+export interface RoomDetail {
+  id: string;
+  name: string;
+  building?: {
+    id: string;
+    name: string;
+  };
+}
+
+/** Person detail from _embedded['persons'] */
+export interface PersonDetail {
+  id: string;
+  fullName: string;
+  lastName?: string;
+  firstName?: string;
+  middleName?: string | null;
+}
+
+/** Event attendee entry from _embedded['event-attendees'] */
+export interface EventAttendeeEmbedded {
+  id: string;
+  roleId: string; // "TEACH" | "STUDENT"
+  _links?: {
+    event?: { href: string };
+    person?: { href: string };
+  };
+}
+
 export interface ScheduleResponse {
   _embedded: {
     events: ScheduleEvent[];
     'course-unit-realizations'?: CourseUnitRealization[];
+    'event-locations'?: EventLocationEmbedded[];
+    'event-rooms'?: EventRoomLink[];
+    rooms?: RoomDetail[];
+    'event-attendees'?: EventAttendeeEmbedded[];
+    persons?: PersonDetail[];
   };
 }
 

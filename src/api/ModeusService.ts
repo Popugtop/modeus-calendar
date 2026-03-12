@@ -17,6 +17,8 @@ import type {
   SelectionsResponse,
   StudentInfo,
 } from '../types';
+// EventAttendee and EventLocation are still used by getEventLocation / getEventAttendees
+// which are kept as fallbacks but no longer called during normal sync.
 import type { ModeusAuthService } from '../auth/ModeusAuthService';
 
 export class ModeusService {
