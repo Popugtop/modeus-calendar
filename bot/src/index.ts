@@ -8,6 +8,7 @@ import { BackupService } from './backup';
 const BOT_TOKEN       = process.env['TELEGRAM_BOT_TOKEN'];
 const ADMIN_ID        = parseInt(process.env['TELEGRAM_ADMIN_ID'] ?? '0', 10);
 const BACKEND_URL     = process.env['BACKEND_URL'] ?? 'http://backend:3000';
+const PUBLIC_URL      = (process.env['PUBLIC_URL'] ?? BACKEND_URL).replace(/\/$/, '');
 const INTERNAL_SECRET = process.env['INTERNAL_SECRET'] ?? '';
 const DB_PATH         = process.env['DB_PATH'] ?? '/app/data/calendar.db';
 
@@ -622,7 +623,7 @@ bot.on('text', async ctx => {
     }
 
     const lines = results.map(r => {
-      const url = `${BACKEND_URL}/${r.calendarToken}`;
+      const url = `${PUBLIC_URL}/${r.calendarToken}`;
       return `👤 *${r.fio}*\n\`${url}\``;
     });
 

@@ -29,6 +29,7 @@ services:
     environment:
       DB_PATH: /app/data/calendar.db
       BACKEND_URL: http://backend:3000
+      # PUBLIC_URL is read from .env (set it to your public domain)
     volumes:
       - calendar-data:/app/data
     depends_on:
