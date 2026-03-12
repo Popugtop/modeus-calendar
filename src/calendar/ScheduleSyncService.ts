@@ -116,6 +116,13 @@ export class ScheduleSyncService {
       (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime(),
     );
 
+    // Build course-unit-realization ID → name map from the embedded data
+    const courseMap = new Map<string, string>();
+    const curs = schedule._embedded?.['course-unit-realizations'] ?? [];
+    for (const cur of curs) {
+      courseMap.set(cur.id, cur.nameShort || cur.name || '');
+    }
+
     // Fetch location + attendees in parallel for all events
     const enriched = await Promise.all(
       events.map(async (ev): Promise<EnrichedEvent> => {
@@ -123,6 +130,15 @@ export class ScheduleSyncService {
           this.modeus.getEventLocation(ev.id).catch(() => ({})),
           this.modeus.getEventAttendees(ev.id).catch(() => []),
         ]);
+
+        // Resolve course name from _links → course-unit-realization href
+        let courseName: string | null = null;
+        const curHref = ev._links?.['course-unit-realization']?.href;
+        if (curHref) {
+          // href like "/schedule-calendar-v2/api/calendar/course-unit-realizations/UUID"
+          const curId = curHref.split('/').pop();
+          if (curId) courseName = courseMap.get(curId) ?? null;
+        }
 
         return {
           event: {
@@ -132,6 +148,7 @@ export class ScheduleSyncService {
             startsAtLocal: ev.startsAtLocal,
             endsAtLocal:   ev.endsAtLocal,
           },
+          courseName,
           location:  location  as EnrichedEvent['location'],
           attendees: (attendees as EnrichedEvent['attendees']),
         };

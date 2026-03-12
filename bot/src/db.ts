@@ -48,7 +48,27 @@ export class BotRepository {
         created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
         used_at          TEXT
       );
+      CREATE TABLE IF NOT EXISTS settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
     `);
+  }
+
+  getSetting(key: string, defaultValue = ''): string {
+    const row = this.db
+      .prepare<[string], { value: string }>(`SELECT value FROM settings WHERE key = ?`)
+      .get(key);
+    return row?.value ?? defaultValue;
+  }
+
+  setSetting(key: string, value: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(key, value);
   }
 
   createInviteCode(): string {
@@ -96,6 +116,17 @@ export class BotRepository {
       .all(pageSize, page * pageSize)
       .map(r => ({ fio: r.fio, createdAt: r.created_at }));
     return { items, total };
+  }
+
+  findSubscriptionsByFio(
+    query: string,
+  ): { fio: string; calendarToken: string }[] {
+    return this.db
+      .prepare<[string], SubscriptionRow>(
+        `SELECT fio, calendar_token FROM subscriptions WHERE fio LIKE ? ORDER BY fio LIMIT 10`,
+      )
+      .all(`%${query}%`)
+      .map(r => ({ fio: r.fio, calendarToken: r.calendar_token }));
   }
 
   deleteInviteCode(code: string): boolean {

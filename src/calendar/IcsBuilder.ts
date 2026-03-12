@@ -33,7 +33,7 @@ export function buildIcs(
   });
 
   for (const enriched of events) {
-    const { event, location, attendees } = enriched;
+    const { event, courseName, location, attendees } = enriched;
 
     // ── Dates (startsAtLocal is already in Yekaterinburg time, no TZ suffix) ──
     const start = parseLocalDt(event.startsAtLocal);
@@ -65,6 +65,7 @@ export function buildIcs(
     const description = [
       timeRange,
       '',
+      courseName ? `Предмет: ${courseName}` : '',
       typeName,
       '',
       teachers ? `Преподаватель: ${teachers}` : '',
@@ -77,10 +78,8 @@ export function buildIcs(
       .replace(/\n{3,}/g, '\n\n') // collapse repeated blank lines
       .trimEnd();
 
-    // ── Subject code (second CATEGORIES line, extracted from event name) ──────
-    // Event name format: "Курс / Тема занятия / КС Л-06"
-    // Subject code is the last "/" segment with group code stripped.
-    const subjectCode = extractSubjectCode(event.name);
+    // ── Subject code — use courseName if available, else extract from name ───
+    const subjectCode = courseName ?? extractSubjectCode(event.name);
 
     // ── Build event ───────────────────────────────────────────────────────────
     // start/end are bare local datetime strings (no TZ suffix).
@@ -92,7 +91,7 @@ export function buildIcs(
       id:          event.id,
       start,
       end,
-      summary:     formatSummary(event.name),
+      summary:     formatSummary(event.name, courseName),
       description,
       location:    locationStr || undefined,
       organizer:   { name: 'Modeus', email: 'noreply@modeus.org' },
@@ -124,11 +123,15 @@ function fmtTime(localDt: string): string {
 }
 
 /**
- * Formats event name: "Course / Topic / Code" → "Course | Topic"
- * Handles both " / " and "/" as delimiters.
+ * Formats event summary.
+ * If courseName is available, uses "CourseName | TopicName".
+ * Otherwise falls back to splitting the event name by "/".
  */
-function formatSummary(name: string): string {
-  // Normalise: collapse any spacing around "/" to a single " / "
+function formatSummary(name: string, courseName: string | null): string {
+  if (courseName) {
+    return `${courseName} | ${name}`;
+  }
+  // Fallback: split "Course / Topic / Code" → "Course | Topic"
   const segments = name.split('/').map(s => s.trim()).filter(Boolean);
   if (segments.length >= 2) {
     return `${segments[0]} | ${segments[1]}`;

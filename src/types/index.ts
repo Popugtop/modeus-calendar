@@ -21,8 +21,17 @@ export interface ScheduleEvent {
   [key: string]: unknown;
 }
 
+export interface CourseUnitRealization {
+  id: string;
+  nameShort: string;
+  name?: string;
+}
+
 export interface ScheduleResponse {
-  _embedded: { events: ScheduleEvent[] };
+  _embedded: {
+    events: ScheduleEvent[];
+    'course-unit-realizations'?: CourseUnitRealization[];
+  };
 }
 
 // ─── Person search ───────────────────────────────────────────────────────────

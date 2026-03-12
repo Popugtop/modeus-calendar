@@ -14,6 +14,7 @@ export interface Subscription {
 
 export interface EnrichedEvent {
   event: Pick<ScheduleEvent, 'id' | 'name' | 'typeId' | 'startsAtLocal' | 'endsAtLocal'>;
+  courseName: string | null;
   location: EventLocation;
   attendees: Pick<EventAttendee, 'roleId' | 'fullName'>[];
 }
