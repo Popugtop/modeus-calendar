@@ -15,6 +15,10 @@ export interface Subscription {
 export interface EnrichedEvent {
   event: Pick<ScheduleEvent, 'id' | 'name' | 'typeId' | 'startsAtLocal' | 'endsAtLocal'>;
   courseName: string | null;
+  /** iCalendar SEQUENCE — increments on every detected change to this event */
+  sequence: number;
+  /** ISO timestamp of last detected change (used for LAST-MODIFIED in ICS) */
+  lastModified: string;
   location: EventLocation;
   attendees: Pick<EventAttendee, 'roleId' | 'fullName'>[];
 }

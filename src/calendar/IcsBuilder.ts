@@ -33,7 +33,7 @@ export function buildIcs(
   });
 
   for (const enriched of events) {
-    const { event, courseName, location, attendees } = enriched;
+    const { event, courseName, sequence, lastModified, location, attendees } = enriched;
 
     // ── Dates (startsAtLocal is already in Yekaterinburg time, no TZ suffix) ──
     const start = parseLocalDt(event.startsAtLocal);
@@ -95,11 +95,12 @@ export function buildIcs(
       description,
       location:    locationStr || undefined,
       organizer:   { name: 'Modeus', email: 'noreply@modeus.org' },
-      sequence:    0,
+      sequence,
       categories:  buildCategories(typeName, subjectCode),
     });
 
     calEvent.timezone(TIMEZONE);
+    calEvent.lastModified(new Date(lastModified));
   }
 
   return cal.toString();

@@ -149,11 +149,34 @@ export class ScheduleSyncService {
             endsAtLocal:   ev.endsAtLocal,
           },
           courseName,
+          // sequence and lastModified are filled in after fetching, below
+          sequence:     0,
+          lastModified: new Date().toISOString(),
           location:  location  as EnrichedEvent['location'],
           attendees: (attendees as EnrichedEvent['attendees']),
         };
       }),
     );
+
+    // ── Per-event sequence tracking ──────────────────────────────────────────
+    // Hash each event individually (without sequence/lastModified fields so
+    // they don't cause false positives) to detect content changes.
+    const seqInput = enriched.map(e => ({
+      eventId: e.event.id,
+      hash: createHash('sha256')
+        .update(JSON.stringify({ event: e.event, courseName: e.courseName, location: e.location, attendees: e.attendees }))
+        .digest('hex'),
+    }));
+
+    const seqMap = this.repo.updateEventSequences(seqInput);
+
+    for (const e of enriched) {
+      const s = seqMap.get(e.event.id);
+      if (s) {
+        e.sequence     = s.sequence;
+        e.lastModified = s.updatedAt;
+      }
+    }
 
     return enriched;
   }

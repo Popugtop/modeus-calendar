@@ -75,6 +75,13 @@ export class CalendarRepository {
         created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
         used_at          TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS event_sequences (
+        event_id    TEXT    PRIMARY KEY,
+        sequence    INTEGER NOT NULL DEFAULT 0,
+        event_hash  TEXT    NOT NULL,
+        updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+      );
     `);
   }
 
@@ -175,6 +182,53 @@ export class CalendarRepository {
       this.db.prepare(`DELETE FROM schedule_cache WHERE subscription_id = ?`).run(subscriptionId);
       return null;
     }
+  }
+
+  // ─── Event sequences ─────────────────────────────────────────────────────────
+
+  /**
+   * For each event, checks if its content hash has changed.
+   * If changed (or new): increments sequence and records updated_at.
+   * Returns a map of eventId → { sequence, updatedAt }.
+   */
+  updateEventSequences(
+    events: Array<{ eventId: string; hash: string }>,
+  ): Map<string, { sequence: number; updatedAt: string }> {
+    interface SeqRow { sequence: number; event_hash: string; updated_at: string }
+
+    const result = new Map<string, { sequence: number; updatedAt: string }>();
+
+    const select = this.db.prepare<[string], SeqRow>(
+      `SELECT sequence, event_hash, updated_at FROM event_sequences WHERE event_id = ?`,
+    );
+    const insert = this.db.prepare(
+      `INSERT INTO event_sequences (event_id, sequence, event_hash, updated_at)
+       VALUES (?, 0, ?, datetime('now'))`,
+    );
+    const update = this.db.prepare(
+      `UPDATE event_sequences
+       SET sequence = sequence + 1, event_hash = ?, updated_at = datetime('now')
+       WHERE event_id = ?`,
+    );
+
+    const process = this.db.transaction(() => {
+      for (const { eventId, hash } of events) {
+        const existing = select.get(eventId);
+
+        if (!existing) {
+          insert.run(eventId, hash);
+          result.set(eventId, { sequence: 0, updatedAt: new Date().toISOString() });
+        } else if (existing.event_hash !== hash) {
+          update.run(hash, eventId);
+          result.set(eventId, { sequence: existing.sequence + 1, updatedAt: new Date().toISOString() });
+        } else {
+          result.set(eventId, { sequence: existing.sequence, updatedAt: existing.updated_at });
+        }
+      }
+    });
+
+    process();
+    return result;
   }
 
   // ─── Invite codes ───────────────────────────────────────────────────────────
