@@ -5,6 +5,20 @@ import type { EnrichedEvent } from './types';
 import type { CalendarRepository } from './CalendarRepository';
 import type { Subscription } from './types';
 
+// ─── Diff types ───────────────────────────────────────────────────────────────
+
+export interface EventSummary {
+  name: string;
+  startsAtLocal: string;
+  endsAtLocal: string;
+}
+
+export interface ScheduleDiff {
+  added: EventSummary[];
+  removed: EventSummary[];
+  changed: EventSummary[];
+}
+
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 export interface SyncConfig {
@@ -28,7 +42,7 @@ export class ScheduleSyncService {
   private task: ReturnType<typeof cron.schedule> | null = null;
   private readonly config: SyncConfig;
   private onError?: (msg: string) => void;
-  private onUserUpdate?: (telegramId: string, fio: string) => void;
+  private onUserUpdate?: (telegramId: string, fio: string, diff: ScheduleDiff) => void;
 
   constructor(
     private readonly modeus: ModeusService,
@@ -44,7 +58,7 @@ export class ScheduleSyncService {
   }
 
   /** Called when a user's schedule cache is updated. Used to notify the user via Telegram. */
-  setUserNotifier(handler: (telegramId: string, fio: string) => void): void {
+  setUserNotifier(handler: (telegramId: string, fio: string, diff: ScheduleDiff) => void): void {
     this.onUserUpdate = handler;
   }
 
@@ -95,13 +109,19 @@ export class ScheduleSyncService {
         );
       }
 
+      // Fetch old cache before overwriting — needed to compute diff for notifications
+      const oldEvents = (sub.telegramId && this.onUserUpdate)
+        ? (this.repo.getScheduleCache(sub.id) ?? [])
+        : null;
+
       const hash    = computeHash(enriched);
       const updated = this.repo.saveScheduleCache(sub.id, enriched, hash);
 
       if (updated) {
         console.log(`${label} Кэш обновлён.`);
         if (sub.telegramId && this.onUserUpdate) {
-          this.onUserUpdate(sub.telegramId, sub.fio);
+          const diff = computeDiff(oldEvents ?? [], enriched);
+          this.onUserUpdate(sub.telegramId, sub.fio, diff);
         }
       } else {
         console.log(`${label} Без изменений.`);
@@ -277,4 +297,47 @@ export class ScheduleSyncService {
 
 function computeHash(events: EnrichedEvent[]): string {
   return createHash('sha256').update(JSON.stringify(events)).digest('hex');
+}
+
+// ─── Schedule diff ────────────────────────────────────────────────────────────
+
+function computeDiff(oldEvents: EnrichedEvent[], newEvents: EnrichedEvent[]): ScheduleDiff {
+  const now    = new Date();
+  const oldMap = new Map(oldEvents.map(e => [e.event.id, e]));
+  const newMap = new Map(newEvents.map(e => [e.event.id, e]));
+
+  const toSummary = (e: EnrichedEvent): EventSummary => ({
+    name:          e.courseName ?? e.event.name,
+    startsAtLocal: e.event.startsAtLocal,
+    endsAtLocal:   e.event.endsAtLocal,
+  });
+
+  // Only report future events — past changes don't affect the user
+  const isFuture = (e: EnrichedEvent) => new Date(e.event.startsAtLocal) > now;
+
+  const added: EventSummary[]   = [];
+  const removed: EventSummary[] = [];
+  const changed: EventSummary[] = [];
+
+  for (const [id, ev] of newMap) {
+    if (!oldMap.has(id) && isFuture(ev)) added.push(toSummary(ev));
+  }
+  for (const [id, ev] of oldMap) {
+    if (!newMap.has(id) && isFuture(ev)) removed.push(toSummary(ev));
+  }
+  for (const [id, newEv] of newMap) {
+    const oldEv = oldMap.get(id);
+    if (oldEv && newEv.sequence > oldEv.sequence && isFuture(newEv)) {
+      changed.push(toSummary(newEv));
+    }
+  }
+
+  const byTime = (a: EventSummary, b: EventSummary) =>
+    new Date(a.startsAtLocal).getTime() - new Date(b.startsAtLocal).getTime();
+
+  return {
+    added:   added.sort(byTime),
+    removed: removed.sort(byTime),
+    changed: changed.sort(byTime),
+  };
 }

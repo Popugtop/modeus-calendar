@@ -10,6 +10,7 @@ import { CalendarRepository } from './calendar/CalendarRepository';
 import { ScheduleSyncService } from './calendar/ScheduleSyncService';
 import { buildIcs } from './calendar/IcsBuilder';
 import { notifyAdmin, notifyUser } from './notify';
+import type { ScheduleDiff, EventSummary } from './calendar/ScheduleSyncService';
 
 const PORT             = parseInt(process.env['PORT'] ?? '3000', 10);
 const DB_PATH          = process.env['DB_PATH'] ?? './calendar.db';
@@ -64,8 +65,36 @@ async function main(): Promise<void> {
   sync.setErrorHandler(msg => void notifyAdmin(msg));
 
   // Notify users when their schedule is updated
-  sync.setUserNotifier((telegramId, fio) => {
-    void notifyUser(telegramId, `📅 *Расписание обновилось!*\n_${fio}_`);
+  sync.setUserNotifier((telegramId, _fio, diff) => {
+    const total = diff.added.length + diff.removed.length + diff.changed.length;
+    if (total === 0) return; // hash changed but all changes are in the past — skip
+
+    const MONTHS = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+
+    const fmt = (e: EventSummary): string => {
+      // startsAtLocal is "2026-03-13T10:00:00" — slice to avoid timezone issues
+      const [, mm, dd] = e.startsAtLocal.slice(0, 10).split('-');
+      const dateLabel = `${parseInt(dd!)} ${MONTHS[parseInt(mm!) - 1]}`;
+      const start = e.startsAtLocal.slice(11, 16);
+      const end   = e.endsAtLocal.slice(11, 16);
+      return `• ${e.name} — ${dateLabel}, ${start}–${end}`;
+    };
+
+    const lines: string[] = ['📅 *Изменения в расписании*', ''];
+
+    const section = (emoji: string, label: string, items: EventSummary[]) => {
+      if (items.length === 0) return;
+      lines.push(`${emoji} *${label}*`);
+      items.slice(0, 5).forEach(e => lines.push(fmt(e)));
+      if (items.length > 5) lines.push(`_...и ещё ${items.length - 5}_`);
+      lines.push('');
+    };
+
+    section('➕', 'Добавлено:', diff.added);
+    section('🗑', 'Удалено:', diff.removed);
+    section('✏️', 'Изменено:', diff.changed);
+
+    void notifyUser(telegramId, lines.join('\n').trimEnd());
   });
 
   const app = express();
