@@ -127,13 +127,7 @@ async function main(): Promise<void> {
         const personName = body.personName.trim();
         const inviteCode = typeof body.inviteCode === 'string' ? body.inviteCode.trim() : '';
 
-        const existing = repo.findSubscriptionByPersonId(personId);
-
-        if (existing) {
-          res.status(409).json({ error: `Пользователь "${personName}" уже зарегистрирован.` });
-          return;
-        }
-
+        // Re-validate invite: the code must still be valid (not used between the two requests)
         if (INVITE_REQUIRED) {
           if (!inviteCode || !repo.isInviteCodeValid(inviteCode)) {
             res.status(403).json({ error: 'Неверный или уже использованный инвайт-код.' });
@@ -141,8 +135,15 @@ async function main(): Promise<void> {
           }
         }
 
+        const existing = repo.findSubscriptionByPersonId(personId);
+
+        if (existing) {
+          res.status(409).json({ error: `Пользователь "${personName}" уже зарегистрирован.` });
+          return;
+        }
+
         const sub = repo.createSubscription(personName, personId, telegramId);
-        if (INVITE_REQUIRED && inviteCode) repo.useInviteCode(inviteCode, personName);
+        if (inviteCode) repo.useInviteCode(inviteCode, personName);
         void sync.syncOne(sub).catch((err: unknown) =>
           console.error('[Register] Фоновый sync упал:', err),
         );
@@ -174,6 +175,14 @@ async function main(): Promise<void> {
 
       const inviteCode = typeof body.inviteCode === 'string' ? body.inviteCode.trim() : '';
 
+      // ── Validate invite code BEFORE hitting Modeus — prevents search spam ─
+      if (INVITE_REQUIRED) {
+        if (!inviteCode || !repo.isInviteCodeValid(inviteCode)) {
+          res.status(403).json({ error: 'Неверный или уже использованный инвайт-код.' });
+          return;
+        }
+      }
+
       const { persons, students } = await modeus.searchPersons(fio, 10);
 
       if (persons.length === 0) {
@@ -181,7 +190,7 @@ async function main(): Promise<void> {
         return;
       }
 
-      // Multiple results — let user pick (don't validate invite yet)
+      // Multiple results — invite already validated above, let user pick
       if (persons.length > 1) {
         const personList = persons.map(p => ({
           id:           p.id,
@@ -200,15 +209,8 @@ async function main(): Promise<void> {
         return;
       }
 
-      if (INVITE_REQUIRED) {
-        if (!inviteCode || !repo.isInviteCodeValid(inviteCode)) {
-          res.status(403).json({ error: 'Неверный или уже использованный инвайт-код.' });
-          return;
-        }
-      }
-
       const sub = repo.createSubscription(person.fullName, person.id, telegramId);
-      if (INVITE_REQUIRED && inviteCode) repo.useInviteCode(inviteCode, person.fullName);
+      if (inviteCode) repo.useInviteCode(inviteCode, person.fullName);
       void sync.syncOne(sub).catch((err: unknown) =>
         console.error('[Register] Фоновый sync упал:', err),
       );
