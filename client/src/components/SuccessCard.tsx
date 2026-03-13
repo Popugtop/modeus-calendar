@@ -5,9 +5,10 @@ interface Props {
   url: string;
   name: string;
   onReset: () => void;
+  onGoToGuides: () => void;
 }
 
-export default function SuccessCard({ url, name, onReset }: Props) {
+export default function SuccessCard({ url, name, onReset, onGoToGuides }: Props) {
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
@@ -145,13 +146,29 @@ export default function SuccessCard({ url, name, onReset }: Props) {
           </div>
         </motion.div>
 
+        {/* Guide link */}
+        <motion.button
+          onClick={onGoToGuides}
+          whileTap={{ scale: 0.97 }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.5 }}
+          className="w-full py-2.5 px-4 rounded-xl text-sm font-medium bg-accent hover:bg-accent-hover text-white transition-all duration-200 mb-3 flex items-center justify-center gap-2"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+          </svg>
+          Как добавить в календарь
+        </motion.button>
+
         {/* Reset */}
         <motion.button
           onClick={onReset}
           whileTap={{ scale: 0.97 }}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
+          transition={{ delay: 0.55 }}
           className="w-full py-2.5 px-4 rounded-xl text-sm font-medium text-muted border border-border hover:border-border-focus/40 hover:text-primary transition-all duration-200"
         >
           Добавить ещё одного человека

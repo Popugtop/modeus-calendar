@@ -82,6 +82,7 @@ export default function App() {
                 url={form.url}
                 name={form.name}
                 onReset={() => setForm({ stage: 'form' })}
+                onGoToGuides={() => switchPage('guides')}
               />
             )}
           </AnimatePresence>
