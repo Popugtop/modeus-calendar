@@ -6,12 +6,13 @@ import type { PersonOption } from '../lib/api';
 
 interface Props {
   onSuccess: (url: string, name: string) => void;
-  onMultiple?: (persons: PersonOption[], fio: string, inviteCode: string) => void;
+  onMultiple?: (persons: PersonOption[], fio: string, inviteCode: string, telegramId: string) => void;
 }
 
 export default function CalendarForm({ onSuccess, onMultiple }: Props) {
   const [value, setValue] = useState('');
   const [inviteCode, setInviteCode] = useState('');
+  const [telegramId, setTelegramId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [touched, setTouched] = useState(false);
@@ -44,9 +45,10 @@ export default function CalendarForm({ onSuccess, onMultiple }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const result = await register(value.trim(), inviteCode.trim());
+      const tgId = telegramId.trim() || undefined;
+      const result = await register(value.trim(), inviteCode.trim(), undefined, undefined, tgId);
       if (result.status === 'multiple') {
-        onMultiple?.(result.persons, value.trim(), inviteCode.trim());
+        onMultiple?.(result.persons, value.trim(), inviteCode.trim(), telegramId.trim());
       } else {
         onSuccess(result.url, value.trim());
       }
@@ -174,6 +176,38 @@ export default function CalendarForm({ onSuccess, onMultiple }: Props) {
                 'font-mono tracking-widest',
               ].join(' ')}
             />
+          </div>
+
+          {/* Telegram ID input */}
+          <div className="mb-5">
+            <label
+              htmlFor="tg-input"
+              className="block text-sm font-medium text-primary/80 mb-2"
+            >
+              Telegram ID <span className="text-muted font-normal">(необязательно)</span>
+            </label>
+            <input
+              id="tg-input"
+              type="text"
+              inputMode="numeric"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="123456789"
+              value={telegramId}
+              onChange={e => setTelegramId(e.target.value.replace(/\D/g, ''))}
+              disabled={loading}
+              className={[
+                'w-full px-4 py-3 rounded-xl text-base text-primary placeholder-muted/50',
+                'bg-input-bg border border-border transition-all duration-200',
+                'focus:border-border-focus focus:shadow-glow-accent',
+                'disabled:opacity-50 disabled:cursor-not-allowed',
+                'font-mono',
+              ].join(' ')}
+            />
+            <p className="text-xs text-muted/60 mt-1.5">
+              Узнать ID: напишите <span className="text-muted">@userinfobot</span> в Telegram
+            </p>
           </div>
 
           {/* Hint */}

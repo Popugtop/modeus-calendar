@@ -6,6 +6,7 @@ interface SubscriptionRow {
   fio: string;
   modeus_person_id: string;
   calendar_token: string;
+  telegram_id: string | null;
   created_at: string;
 }
 
@@ -53,6 +54,8 @@ export class BotRepository {
         value TEXT NOT NULL
       );
     `);
+    // Migrate existing DBs
+    try { this.db.exec(`ALTER TABLE subscriptions ADD COLUMN telegram_id TEXT`); } catch { /* already exists */ }
   }
 
   getSetting(key: string, defaultValue = ''): string {
@@ -120,13 +123,29 @@ export class BotRepository {
 
   findSubscriptionsByFio(
     query: string,
-  ): { fio: string; calendarToken: string }[] {
+  ): { fio: string; calendarToken: string; modeusPersonId: string; telegramId: string | null }[] {
     return this.db
       .prepare<[string], SubscriptionRow>(
-        `SELECT fio, calendar_token FROM subscriptions WHERE fio LIKE ? ORDER BY fio LIMIT 10`,
+        `SELECT fio, calendar_token, modeus_person_id, telegram_id FROM subscriptions WHERE fio LIKE ? ORDER BY fio LIMIT 10`,
       )
       .all(`%${query}%`)
-      .map(r => ({ fio: r.fio, calendarToken: r.calendar_token }));
+      .map(r => ({ fio: r.fio, calendarToken: r.calendar_token, modeusPersonId: r.modeus_person_id, telegramId: r.telegram_id }));
+  }
+
+  findByTelegramId(telegramId: string): { fio: string; calendarToken: string } | null {
+    const row = this.db
+      .prepare<[string], SubscriptionRow>(
+        `SELECT fio, calendar_token FROM subscriptions WHERE telegram_id = ?`,
+      )
+      .get(telegramId);
+    return row ? { fio: row.fio, calendarToken: row.calendar_token } : null;
+  }
+
+  linkTelegramId(modeusPersonId: string, telegramId: string): boolean {
+    const result = this.db
+      .prepare(`UPDATE subscriptions SET telegram_id = ? WHERE modeus_person_id = ?`)
+      .run(telegramId, modeusPersonId);
+    return result.changes > 0;
   }
 
   deleteInviteCode(code: string): boolean {

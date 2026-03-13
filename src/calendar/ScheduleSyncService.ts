@@ -28,6 +28,7 @@ export class ScheduleSyncService {
   private task: ReturnType<typeof cron.schedule> | null = null;
   private readonly config: SyncConfig;
   private onError?: (msg: string) => void;
+  private onUserUpdate?: (telegramId: string, fio: string) => void;
 
   constructor(
     private readonly modeus: ModeusService,
@@ -40,6 +41,11 @@ export class ScheduleSyncService {
   /** Called with a Markdown error message on sync/auth failures. */
   setErrorHandler(handler: (msg: string) => void): void {
     this.onError = handler;
+  }
+
+  /** Called when a user's schedule cache is updated. Used to notify the user via Telegram. */
+  setUserNotifier(handler: (telegramId: string, fio: string) => void): void {
+    this.onUserUpdate = handler;
   }
 
   start(): void {
@@ -94,6 +100,9 @@ export class ScheduleSyncService {
 
       if (updated) {
         console.log(`${label} Кэш обновлён.`);
+        if (sub.telegramId && this.onUserUpdate) {
+          this.onUserUpdate(sub.telegramId, sub.fio);
+        }
       } else {
         console.log(`${label} Без изменений.`);
       }

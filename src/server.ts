@@ -9,7 +9,7 @@ import { loadTokens, saveTokens } from './auth/tokenCache';
 import { CalendarRepository } from './calendar/CalendarRepository';
 import { ScheduleSyncService } from './calendar/ScheduleSyncService';
 import { buildIcs } from './calendar/IcsBuilder';
-import { notifyAdmin } from './notify';
+import { notifyAdmin, notifyUser } from './notify';
 
 const PORT             = parseInt(process.env['PORT'] ?? '3000', 10);
 const DB_PATH          = process.env['DB_PATH'] ?? './calendar.db';
@@ -63,6 +63,11 @@ async function main(): Promise<void> {
   // Forward sync errors to Telegram admin
   sync.setErrorHandler(msg => void notifyAdmin(msg));
 
+  // Notify users when their schedule is updated
+  sync.setUserNotifier((telegramId, fio) => {
+    void notifyUser(telegramId, `📅 *Расписание обновилось!*\n_${fio}_`);
+  });
+
   const app = express();
 
   // Trust X-Forwarded-* headers from Caddy / nginx reverse proxy.
@@ -106,10 +111,15 @@ async function main(): Promise<void> {
         inviteCode?: unknown;
         personId?: unknown;
         personName?: unknown;
+        telegramId?: unknown;
       };
 
       const host     = req.headers['host'] ?? `localhost:${PORT}`;
       const protocol = (req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol;
+
+      const telegramId = typeof body.telegramId === 'string' && body.telegramId.trim()
+        ? body.telegramId.trim()
+        : undefined;
 
       // ── Pre-selected person (from multiple-results flow) ──────────────────
       if (typeof body.personId === 'string' && typeof body.personName === 'string') {
@@ -131,7 +141,7 @@ async function main(): Promise<void> {
           }
         }
 
-        const sub = repo.createSubscription(personName, personId);
+        const sub = repo.createSubscription(personName, personId, telegramId);
         if (INVITE_REQUIRED && inviteCode) repo.useInviteCode(inviteCode, personName);
         void sync.syncOne(sub).catch((err: unknown) =>
           console.error('[Register] Фоновый sync упал:', err),
@@ -197,7 +207,7 @@ async function main(): Promise<void> {
         }
       }
 
-      const sub = repo.createSubscription(person.fullName, person.id);
+      const sub = repo.createSubscription(person.fullName, person.id, telegramId);
       if (INVITE_REQUIRED && inviteCode) repo.useInviteCode(inviteCode, person.fullName);
       void sync.syncOne(sub).catch((err: unknown) =>
         console.error('[Register] Фоновый sync упал:', err),

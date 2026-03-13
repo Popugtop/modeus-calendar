@@ -7,6 +7,7 @@ export interface Subscription {
   fio: string;
   modeusPersonId: string;
   calendarToken: string;
+  telegramId: string | null;
   createdAt: string;
 }
 

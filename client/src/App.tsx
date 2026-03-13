@@ -8,7 +8,7 @@ import type { PersonOption } from './lib/api';
 
 type FormState =
   | { stage: 'form' }
-  | { stage: 'selecting'; persons: PersonOption[]; fio: string; inviteCode: string }
+  | { stage: 'selecting'; persons: PersonOption[]; fio: string; inviteCode: string; telegramId: string }
   | { stage: 'success'; url: string; name: string };
 
 type Page = 'main' | 'guides';
@@ -72,8 +72,8 @@ export default function App() {
               <CalendarForm
                 key="form"
                 onSuccess={(url, name) => setForm({ stage: 'success', url, name })}
-                onMultiple={(persons, fio, inviteCode) =>
-                  setForm({ stage: 'selecting', persons, fio, inviteCode })
+                onMultiple={(persons, fio, inviteCode, telegramId) =>
+                  setForm({ stage: 'selecting', persons, fio, inviteCode, telegramId })
                 }
               />
             ) : (
@@ -94,6 +94,7 @@ export default function App() {
           persons={form.persons}
           fio={form.fio}
           inviteCode={form.inviteCode}
+          telegramId={form.telegramId}
           onSuccess={(url, name) => setForm({ stage: 'success', url, name })}
           onCancel={() => setForm({ stage: 'form' })}
         />

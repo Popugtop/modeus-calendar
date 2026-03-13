@@ -19,11 +19,12 @@ export async function register(
   inviteCode: string,
   personId?: string,
   personName?: string,
+  telegramId?: string,
 ): Promise<RegisterResponse> {
   const res = await fetch('/api/calendar/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fio, inviteCode, personId, personName }),
+    body: JSON.stringify({ fio, inviteCode, personId, personName, telegramId }),
   });
 
   if (!res.ok) {

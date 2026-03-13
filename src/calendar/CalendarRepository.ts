@@ -9,6 +9,7 @@ interface SubscriptionRow {
   fio: string;
   modeus_person_id: string;
   calendar_token: string;
+  telegram_id: string | null;
   created_at: string;
 }
 
@@ -57,6 +58,7 @@ export class CalendarRepository {
         fio              TEXT    NOT NULL,
         modeus_person_id TEXT    NOT NULL UNIQUE,
         calendar_token   TEXT    NOT NULL UNIQUE,
+        telegram_id      TEXT,
         created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
       );
 
@@ -85,11 +87,14 @@ export class CalendarRepository {
         updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
       );
     `);
+
+    // Migrate existing DBs that don't have telegram_id yet
+    try { this.db.exec(`ALTER TABLE subscriptions ADD COLUMN telegram_id TEXT`); } catch { /* already exists */ }
   }
 
   // ─── Subscriptions ──────────────────────────────────────────────────────────
 
-  createSubscription(fio: string, modeusPersonId: string): Subscription {
+  createSubscription(fio: string, modeusPersonId: string, telegramId?: string): Subscription {
     const existing = this.findSubscriptionByPersonId(modeusPersonId);
     if (existing) return existing;
 
@@ -101,12 +106,19 @@ export class CalendarRepository {
 
     this.db
       .prepare(
-        `INSERT INTO subscriptions (fio, modeus_person_id, calendar_token)
-         VALUES (@fio, @modeusPersonId, @token)`,
+        `INSERT INTO subscriptions (fio, modeus_person_id, calendar_token, telegram_id)
+         VALUES (@fio, @modeusPersonId, @token, @telegramId)`,
       )
-      .run({ fio, modeusPersonId, token });
+      .run({ fio, modeusPersonId, token, telegramId: telegramId ?? null });
 
     return this.findSubscriptionByToken(token)!;
+  }
+
+  setTelegramId(modeusPersonId: string, telegramId: string | null): boolean {
+    const result = this.db
+      .prepare(`UPDATE subscriptions SET telegram_id = ? WHERE modeus_person_id = ?`)
+      .run(telegramId, modeusPersonId);
+    return result.changes > 0;
   }
 
   findSubscriptionByToken(token: string): Subscription | null {
@@ -315,11 +327,12 @@ export class CalendarRepository {
 
 function mapRow(row: SubscriptionRow): Subscription {
   return {
-    id: row.id,
-    fio: row.fio,
+    id:             row.id,
+    fio:            row.fio,
     modeusPersonId: row.modeus_person_id,
-    calendarToken: row.calendar_token,
-    createdAt: row.created_at,
+    calendarToken:  row.calendar_token,
+    telegramId:     row.telegram_id,
+    createdAt:      row.created_at,
   };
 }
 

@@ -7,6 +7,7 @@ interface Props {
   persons: PersonOption[];
   fio: string;
   inviteCode: string;
+  telegramId: string;
   onSuccess: (url: string, name: string) => void;
   onCancel: () => void;
 }
@@ -15,6 +16,7 @@ export default function PersonPickerModal({
   persons,
   fio,
   inviteCode,
+  telegramId,
   onSuccess,
   onCancel,
 }: Props) {
@@ -25,7 +27,7 @@ export default function PersonPickerModal({
     setLoading(person.id);
     setError(null);
     try {
-      const result = await register(fio, inviteCode, person.id, person.fullName);
+      const result = await register(fio, inviteCode, person.id, person.fullName, telegramId || undefined);
       if (result.status === 'success') {
         onSuccess(result.url, person.fullName);
       }

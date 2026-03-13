@@ -26,20 +26,11 @@ const DEFAULT_BACKUP_CRON = '0 2 * * *';
 backup.startSchedule(repo.getSetting('backup_cron', DEFAULT_BACKUP_CRON));
 
 // ─── In-memory state for multi-step flows ────────────────────────────────────
-const userState         = new Map<number, { action: string }>();
+const userState         = new Map<number, { action: string; data?: string }>();
 const pendingSelections = new Map<
   number,
   Array<{ id: string; name: string; specialty: string | null }>
 >();
-
-// ─── Admin-only middleware ────────────────────────────────────────────────────
-bot.use(async (ctx, next) => {
-  if (ctx.from?.id !== ADMIN_ID) {
-    await ctx.reply('⛔ Доступ запрещён.');
-    return;
-  }
-  return next();
-});
 
 // ─── Keyboards ───────────────────────────────────────────────────────────────
 
@@ -54,7 +45,10 @@ function mainMenu() {
       Markup.button.callback('👥 Пользователи', 'users_p_0'),
       Markup.button.callback('🔑 Инвайт-коды', 'invites_p_0'),
     ],
-    [Markup.button.callback('🔗 Найти ссылку', 'find_link')],
+    [
+      Markup.button.callback('🔗 Найти ссылку', 'find_link'),
+      Markup.button.callback('🔗 Привязать TG ID', 'link_tg'),
+    ],
     [Markup.button.callback('📦 Бэкапы', 'backup_menu')],
   ]);
 }
@@ -82,17 +76,61 @@ function intervalMenu(currentCron: string) {
   ]);
 }
 
+// ─── Admin check helper ───────────────────────────────────────────────────────
+
+function isAdmin(userId: number): boolean {
+  return userId === ADMIN_ID;
+}
+
 // ─── Start / Menu ─────────────────────────────────────────────────────────────
 
 bot.start(async ctx => {
-  await ctx.reply('👋 Добро пожаловать в панель управления *Modeus Calendar*', {
-    parse_mode: 'Markdown',
-    ...mainMenu(),
-  });
+  const userId = ctx.from.id;
+
+  if (isAdmin(userId)) {
+    await ctx.reply('👋 Добро пожаловать в панель управления *Modeus Calendar*', {
+      parse_mode: 'Markdown',
+      ...mainMenu(),
+    });
+    return;
+  }
+
+  // User flow: look up their subscription by Telegram ID
+  const sub = repo.findByTelegramId(String(userId));
+  if (sub) {
+    const url = `${PUBLIC_URL}/${sub.calendarToken}`;
+    await ctx.reply(
+      `👋 Привет, *${sub.fio}*!\n\nТвоя ссылка на расписание:\n\`${url}\`\n\n_Добавь её в Calendar — и расписание будет обновляться автоматически._`,
+      { parse_mode: 'Markdown' },
+    );
+  } else {
+    await ctx.reply(
+      `👋 Привет!\n\nТвой Telegram ID: \`${userId}\`\n\nПередай его администратору — он привяжет ID к твоей подписке. После этого нажми /start снова.`,
+      { parse_mode: 'Markdown' },
+    );
+  }
 });
 
 bot.command('menu', async ctx => {
+  if (!isAdmin(ctx.from.id)) return;
   await ctx.reply('Главное меню:', mainMenu());
+});
+
+// ─── Admin-only guard for all callback actions ────────────────────────────────
+
+bot.use(async (ctx, next) => {
+  // Only applies to callback queries and non-/start messages
+  if (ctx.updateType === 'callback_query' || ctx.updateType === 'message') {
+    if (ctx.updateType === 'message' && ctx.message && 'text' in ctx.message) {
+      const text = ctx.message.text ?? '';
+      if (text === '/start') return next(); // handled above
+    }
+    if (!isAdmin(ctx.from?.id ?? 0)) {
+      if (ctx.updateType === 'callback_query') await ctx.answerCbQuery();
+      return; // silently ignore non-admins for everything else
+    }
+  }
+  return next();
 });
 
 // ─── Statistics ───────────────────────────────────────────────────────────────
@@ -245,6 +283,7 @@ bot.action('back_main', async ctx => {
   await ctx.answerCbQuery();
   userState.delete(ctx.from!.id);
   pendingSelections.delete(ctx.from!.id);
+  pendingLinkSelections.delete(ctx.from!.id);
   await ctx.editMessageText('Главное меню:', mainMenu());
 });
 
@@ -303,6 +342,45 @@ bot.action('find_link', async ctx => {
   userState.set(ctx.from!.id, { action: 'awaiting_link_query' });
   await ctx.editMessageText(
     '🔗 *Найти ссылку на календарь*\n\nВведите ФИО (или часть) пользователя:',
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'back_main')]]),
+    },
+  );
+});
+
+// ─── Link Telegram ID to user ─────────────────────────────────────────────────
+
+const pendingLinkSelections = new Map<
+  number,
+  Array<{ name: string; modeusPersonId: string }>
+>();
+
+bot.action('link_tg', async ctx => {
+  await ctx.answerCbQuery();
+  userState.set(ctx.from!.id, { action: 'awaiting_link_tg_fio' });
+  await ctx.editMessageText(
+    '🔗 *Привязать Telegram ID*\n\nВведите ФИО пользователя (или часть):',
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'back_main')]]),
+    },
+  );
+});
+
+bot.action(/^link_tg_pick_(\d+)$/, async ctx => {
+  await ctx.answerCbQuery();
+  const idx     = parseInt((ctx.match as RegExpMatchArray)[1] ?? '0', 10);
+  const persons = pendingLinkSelections.get(ctx.from!.id);
+  if (!persons || idx >= persons.length) {
+    await ctx.editMessageText('❌ Сессия устарела.', mainMenu());
+    return;
+  }
+  const person = persons[idx]!;
+  pendingLinkSelections.delete(ctx.from!.id);
+  userState.set(ctx.from!.id, { action: 'awaiting_link_tg_id', data: person.modeusPersonId });
+  await ctx.editMessageText(
+    `🔗 Пользователь: *${person.name}*\n\nВведите Telegram ID для привязки:`,
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'back_main')]]),
@@ -596,6 +674,70 @@ bot.on('text', async ctx => {
       `✅ Расписание установлено: \`${expr}\``,
       { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('◀️ Меню', 'backup_int')]]) },
     );
+    return;
+  }
+
+  // ── Link TG: search by FIO ───────────────────────────────────────────────
+  if (state?.action === 'awaiting_link_tg_fio') {
+    userState.delete(ctx.from.id);
+    const query = ctx.message.text.trim();
+    const results = repo.findSubscriptionsByFio(query);
+
+    if (results.length === 0) {
+      await ctx.reply(
+        `❌ По запросу «${query}» никого не найдено.`,
+        Markup.inlineKeyboard([[Markup.button.callback('◀️ Меню', 'back_main')]]),
+      );
+      return;
+    }
+
+    if (results.length === 1) {
+      const person = results[0]!;
+      userState.set(ctx.from.id, { action: 'awaiting_link_tg_id', data: person.modeusPersonId });
+      const tgInfo = person.telegramId ? `\nТекущий TG ID: \`${person.telegramId}\`` : '';
+      await ctx.reply(
+        `🔗 Пользователь: *${person.fio}*${tgInfo}\n\nВведите новый Telegram ID:`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'back_main')]]),
+        },
+      );
+      return;
+    }
+
+    pendingLinkSelections.set(
+      ctx.from.id,
+      results.map(r => ({ name: r.fio, modeusPersonId: r.modeusPersonId })),
+    );
+    const buttons = results.map((r, i) => [Markup.button.callback(r.fio, `link_tg_pick_${i}`)]);
+    buttons.push([Markup.button.callback('❌ Отмена', 'back_main')]);
+    await ctx.reply('Найдено несколько. Выберите пользователя:', Markup.inlineKeyboard(buttons));
+    return;
+  }
+
+  // ── Link TG: set telegram ID ─────────────────────────────────────────────
+  if (state?.action === 'awaiting_link_tg_id') {
+    userState.delete(ctx.from.id);
+    const modeusPersonId = state.data ?? '';
+    const input = ctx.message.text.trim();
+
+    if (!/^\d+$/.test(input)) {
+      await ctx.reply(
+        '❌ Telegram ID должен состоять только из цифр. Попробуйте снова.',
+        Markup.inlineKeyboard([[Markup.button.callback('◀️ Меню', 'back_main')]]),
+      );
+      return;
+    }
+
+    const ok = repo.linkTelegramId(modeusPersonId, input);
+    if (ok) {
+      await ctx.reply(
+        `✅ Telegram ID \`${input}\` привязан.`,
+        { parse_mode: 'Markdown', ...mainMenu() },
+      );
+    } else {
+      await ctx.reply('❌ Пользователь не найден.', mainMenu());
+    }
     return;
   }
 
