@@ -107,17 +107,17 @@ export class BotRepository {
   listSubscriptions(
     page: number,
     pageSize: number,
-  ): { items: { fio: string; createdAt: string }[]; total: number } {
+  ): { items: { fio: string; createdAt: string; telegramId: string | null }[]; total: number } {
     const total =
       this.db
         .prepare<[], { count: number }>(`SELECT COUNT(*) as count FROM subscriptions`)
         .get()?.count ?? 0;
     const items = this.db
       .prepare<[number, number], SubscriptionRow>(
-        `SELECT fio, created_at FROM subscriptions ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+        `SELECT fio, created_at, telegram_id FROM subscriptions ORDER BY created_at DESC LIMIT ? OFFSET ?`,
       )
       .all(pageSize, page * pageSize)
-      .map(r => ({ fio: r.fio, createdAt: r.created_at }));
+      .map(r => ({ fio: r.fio, createdAt: r.created_at, telegramId: r.telegram_id }));
     return { items, total };
   }
 
@@ -145,6 +145,13 @@ export class BotRepository {
     const result = this.db
       .prepare(`UPDATE subscriptions SET telegram_id = ? WHERE modeus_person_id = ?`)
       .run(telegramId, modeusPersonId);
+    return result.changes > 0;
+  }
+
+  deleteSubscription(modeusPersonId: string): boolean {
+    const result = this.db
+      .prepare(`DELETE FROM subscriptions WHERE modeus_person_id = ?`)
+      .run(modeusPersonId);
     return result.changes > 0;
   }
 
