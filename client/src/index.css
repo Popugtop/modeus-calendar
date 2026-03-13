@@ -18,6 +18,16 @@ input:focus {
   outline: none;
 }
 
+/* Guide HTML content */
+.guide-content b,
+.guide-content strong { color: #ece8df; font-weight: 600; }
+.guide-content i,
+.guide-content em     { font-style: italic; }
+.guide-content a      { color: #d97757; text-decoration: underline; text-underline-offset: 2px; }
+.guide-content a:hover{ color: #c96a46; }
+.guide-content code   { background: #1a1917; border: 1px solid #333028; border-radius: 4px; padding: 1px 5px; font-size: 0.85em; font-family: monospace; color: #ece8df; }
+.guide-content br     { display: block; margin-top: 4px; }
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

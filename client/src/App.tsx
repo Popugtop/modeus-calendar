@@ -3,15 +3,25 @@ import { useState } from 'react';
 import CalendarForm from './components/CalendarForm';
 import SuccessCard from './components/SuccessCard';
 import PersonPickerModal from './components/PersonPickerModal';
+import GuidesPage from './components/GuidesPage';
 import type { PersonOption } from './lib/api';
 
-type State =
+type FormState =
   | { stage: 'form' }
   | { stage: 'selecting'; persons: PersonOption[]; fio: string; inviteCode: string }
   | { stage: 'success'; url: string; name: string };
 
+type Page = 'main' | 'guides';
+
 export default function App() {
-  const [state, setState] = useState<State>({ stage: 'form' });
+  const [page, setPage]       = useState<Page>('main');
+  const [form, setForm]       = useState<FormState>({ stage: 'form' });
+
+  function switchPage(p: Page) {
+    setPage(p);
+    // Reset form when switching away
+    if (p !== 'main') setForm({ stage: 'form' });
+  }
 
   return (
     <div className="min-h-screen bg-bg flex flex-col">
@@ -25,7 +35,7 @@ export default function App() {
       />
 
       {/* Header */}
-      <header className="relative z-10 flex items-center justify-center pt-10 pb-6 px-4">
+      <header className="relative z-10 flex flex-col items-center pt-10 pb-4 px-4 gap-4">
         <motion.div
           initial={{ opacity: 0, y: -12 }}
           animate={{ opacity: 1, y: 0 }}
@@ -40,42 +50,52 @@ export default function App() {
             <p className="text-sm text-muted">Расписание ТюмГУ в вашем календаре</p>
           </div>
         </motion.div>
+
+        {/* Tab navigation */}
+        <nav className="flex items-center gap-1 bg-surface border border-border rounded-xl p-1">
+          <TabButton active={page === 'main'}   onClick={() => switchPage('main')}>
+            Подписка
+          </TabButton>
+          <TabButton active={page === 'guides'} onClick={() => switchPage('guides')}>
+            Гайды
+          </TabButton>
+        </nav>
       </header>
 
       {/* Main */}
-      <main className="relative z-10 flex-1 flex items-start justify-center px-4 pb-16 pt-2">
+      <main className="relative z-10 flex-1 flex items-start justify-center px-4 pb-16 pt-4">
         <div className="w-full max-w-md">
           <AnimatePresence mode="wait">
-            {state.stage === 'form' || state.stage === 'selecting' ? (
+            {page === 'guides' ? (
+              <GuidesPage key="guides" />
+            ) : form.stage === 'form' || form.stage === 'selecting' ? (
               <CalendarForm
                 key="form"
-                onSuccess={(url, name) =>
-                  setState({ stage: 'success', url, name })
-                }
+                onSuccess={(url, name) => setForm({ stage: 'success', url, name })}
                 onMultiple={(persons, fio, inviteCode) =>
-                  setState({ stage: 'selecting', persons, fio, inviteCode })
+                  setForm({ stage: 'selecting', persons, fio, inviteCode })
                 }
               />
             ) : (
               <SuccessCard
                 key="success"
-                url={state.url}
-                name={state.name}
-                onReset={() => setState({ stage: 'form' })}
+                url={form.url}
+                name={form.name}
+                onReset={() => setForm({ stage: 'form' })}
               />
             )}
           </AnimatePresence>
         </div>
       </main>
 
-      {/* Person picker modal (rendered outside AnimatePresence to avoid layout shift) */}
-      {state.stage === 'selecting' && (
+      {/* Person picker modal */}
+      {form.stage === 'selecting' && page === 'main' && (
         <PersonPickerModal
-          persons={state.persons}
-          fio={state.fio}
-          inviteCode={state.inviteCode}
-          onSuccess={(url, name) => setState({ stage: 'success', url, name })}
-          onCancel={() => setState({ stage: 'form' })}
+          persons={form.persons}
+          fio={form.fio}
+          inviteCode={form.inviteCode}
+          onSuccess={(url, name) => setForm({ stage: 'success', url, name })}
+          onCancel={() => setForm({ stage: 'form' })}
         />
       )}
 
@@ -86,6 +106,30 @@ export default function App() {
         </p>
       </footer>
     </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        'px-4 py-1.5 rounded-lg text-sm font-medium transition-all duration-200',
+        active
+          ? 'bg-accent text-white shadow-sm'
+          : 'text-muted hover:text-primary',
+      ].join(' ')}
+    >
+      {children}
+    </button>
   );
 }
 
