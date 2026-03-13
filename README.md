@@ -78,13 +78,6 @@
 # Через git:
 git clone <repo-url> /root/app
 cd /root/app
-
-# Или через rsync с локальной машины:
-rsync -av \
-  --exclude='node_modules' --exclude='client/node_modules' --exclude='bot/node_modules' \
-  --exclude='dist' --exclude='client/dist' --exclude='bot/dist' \
-  --exclude='.tokens.json' --exclude='*.db' --exclude='.env' \
-  ./modeus-calendar/ root@<IP>:/root/app/
 ```
 
 ### Шаг 2 — Создай `.env`
