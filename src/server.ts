@@ -9,6 +9,7 @@ import { loadTokens, saveTokens } from './auth/tokenCache';
 import { CalendarRepository } from './calendar/CalendarRepository';
 import { ScheduleSyncService } from './calendar/ScheduleSyncService';
 import { buildIcs } from './calendar/IcsBuilder';
+import { notifyAdmin } from './notify';
 
 const PORT             = parseInt(process.env['PORT'] ?? '3000', 10);
 const DB_PATH          = process.env['DB_PATH'] ?? './calendar.db';
@@ -56,8 +57,11 @@ async function createModeusService(): Promise<ModeusService> {
 
 async function main(): Promise<void> {
   const modeus = await createModeusService();
-  const repo   = new CalendarRepository(DB_PATH);
+  const repo   = new CalendarRepository(DB_PATH, INTERNAL_SECRET);
   const sync   = new ScheduleSyncService(modeus, repo);
+
+  // Forward sync errors to Telegram admin
+  sync.setErrorHandler(msg => void notifyAdmin(msg));
 
   const app = express();
 
@@ -339,6 +343,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
   console.error('Startup error:', err);
-  process.exit(1);
+  void notifyAdmin(`🚨 *Backend не запустился*\n\`${msg}\``).finally(() => process.exit(1));
 });

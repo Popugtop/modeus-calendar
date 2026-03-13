@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { randomBytes } from 'crypto';
+import { createHmac, randomBytes } from 'crypto';
 import type { EnrichedEvent, Subscription } from './types';
 
 // ─── Raw DB row shapes ────────────────────────────────────────────────────────
@@ -41,9 +41,11 @@ export interface InviteCodeInfo {
 
 export class CalendarRepository {
   private readonly db: Database.Database;
+  private readonly tokenSecret: string;
 
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath);
+  constructor(dbPath: string, tokenSecret = '') {
+    this.db          = new Database(dbPath);
+    this.tokenSecret = tokenSecret;
     this.db.pragma('journal_mode = WAL');
     this.initialize();
   }
@@ -91,7 +93,11 @@ export class CalendarRepository {
     const existing = this.findSubscriptionByPersonId(modeusPersonId);
     if (existing) return existing;
 
-    const token = randomBytes(24).toString('hex');
+    // Deterministic token: HMAC-SHA256(secret, personId) → same link survives DB loss.
+    // Falls back to random if secret is not configured.
+    const token = this.tokenSecret
+      ? createHmac('sha256', this.tokenSecret).update(modeusPersonId).digest('hex').slice(0, 48)
+      : randomBytes(24).toString('hex');
 
     this.db
       .prepare(

@@ -12,11 +12,14 @@ export interface SyncConfig {
   cronSchedule: string;
   /** How many weeks ahead to fetch. Default: 4 */
   weeksAhead: number;
+  /** How many weeks into the past to include. Default: 3 */
+  weeksPast: number;
 }
 
 const DEFAULTS: SyncConfig = {
-  cronSchedule: process.env['CRON_SCHEDULE'] ?? '0 */3 * * *',
+  cronSchedule: process.env['CRON_SCHEDULE']     ?? '0 */3 * * *',
   weeksAhead:   parseInt(process.env['SYNC_WEEKS_AHEAD'] ?? '4', 10),
+  weeksPast:    parseInt(process.env['SYNC_WEEKS_PAST']  ?? '3', 10),
 };
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -24,6 +27,7 @@ const DEFAULTS: SyncConfig = {
 export class ScheduleSyncService {
   private task: ReturnType<typeof cron.schedule> | null = null;
   private readonly config: SyncConfig;
+  private onError?: (msg: string) => void;
 
   constructor(
     private readonly modeus: ModeusService,
@@ -31,6 +35,11 @@ export class ScheduleSyncService {
     config: Partial<SyncConfig> = {},
   ) {
     this.config = { ...DEFAULTS, ...config };
+  }
+
+  /** Called with a Markdown error message on sync/auth failures. */
+  setErrorHandler(handler: (msg: string) => void): void {
+    this.onError = handler;
   }
 
   start(): void {
@@ -90,6 +99,15 @@ export class ScheduleSyncService {
       }
     } catch (err: unknown) {
       console.error(`${label} Ошибка синхронизации:`, err);
+      const msg = err instanceof Error ? err.message : String(err);
+      const isToken = msg.includes('401') || msg.includes('403') ||
+                      msg.toLowerCase().includes('токен') ||
+                      msg.toLowerCase().includes('token');
+      this.onError?.(
+        isToken
+          ? `🔑 *Ошибка токена Modeus*\n${label}: \`${msg}\`\n\nТокен устарел — возможно нужно обновить учётные данные.`
+          : `⚠️ *Ошибка синхронизации*\n${label}: \`${msg}\``,
+      );
     }
   }
 
@@ -100,12 +118,13 @@ export class ScheduleSyncService {
   ): Promise<EnrichedEvent[]> {
     const now = new Date();
 
-    // timeMin = start of current day (UTC midnight)
+    // timeMin = weeksPast weeks ago (midnight UTC)
     const timeMin = new Date(now);
+    timeMin.setDate(timeMin.getDate() - this.config.weeksPast * 7);
     timeMin.setUTCHours(0, 0, 0, 0);
 
-    // timeMax = timeMin + N weeks
-    const timeMax = new Date(timeMin);
+    // timeMax = now + weeksAhead weeks
+    const timeMax = new Date(now);
     timeMax.setDate(timeMax.getDate() + this.config.weeksAhead * 7);
 
     const schedule = await this.modeus.getSchedule({
