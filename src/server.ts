@@ -146,15 +146,22 @@ async function main(): Promise<void> {
       const host     = req.headers['host'] ?? `localhost:${PORT}`;
       const protocol = (req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol;
 
-      const telegramId = typeof body.telegramId === 'string' && body.telegramId.trim()
-        ? body.telegramId.trim()
-        : undefined;
+      // Telegram ID must be numeric and within sane bounds (5–15 digits)
+      const rawTgId = typeof body.telegramId === 'string' ? body.telegramId.trim() : '';
+      const telegramId = /^\d{5,15}$/.test(rawTgId) ? rawTgId : undefined;
 
       // ── Pre-selected person (from multiple-results flow) ──────────────────
       if (typeof body.personId === 'string' && typeof body.personName === 'string') {
         const personId   = body.personId.trim();
         const personName = body.personName.trim();
         const inviteCode = typeof body.inviteCode === 'string' ? body.inviteCode.trim() : '';
+
+        // personName comes back from the client — validate it like a FIO
+        const nameError = validateFio(personName);
+        if (nameError) {
+          res.status(400).json({ error: nameError });
+          return;
+        }
 
         // Re-validate invite: the code must still be valid (not used between the two requests)
         if (INVITE_REQUIRED) {
