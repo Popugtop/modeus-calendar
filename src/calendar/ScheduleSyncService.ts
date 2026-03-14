@@ -43,13 +43,19 @@ export class ScheduleSyncService {
   private readonly config: SyncConfig;
   private onError?: (msg: string) => void;
   private onUserUpdate?: (telegramId: string, fio: string, diff: ScheduleDiff) => void;
+  private tokenRefresher?: () => Promise<ModeusService>;
 
   constructor(
-    private readonly modeus: ModeusService,
+    private modeus: ModeusService,
     private readonly repo: CalendarRepository,
     config: Partial<SyncConfig> = {},
   ) {
     this.config = { ...DEFAULTS, ...config };
+  }
+
+  /** Called to obtain a fresh ModeusService when a 401 is encountered during sync. */
+  setTokenRefresher(fn: () => Promise<ModeusService>): void {
+    this.tokenRefresher = fn;
   }
 
   /** Called with a Markdown error message on sync/auth failures. */
@@ -94,7 +100,7 @@ export class ScheduleSyncService {
     }
   }
 
-  async syncOne(sub: Subscription): Promise<void> {
+  async syncOne(sub: Subscription, _retried = false): Promise<void> {
     const label = `[Sync:${sub.fio}]`;
     try {
       const enriched = await this.fetchEnrichedEvents(sub.modeusPersonId);
@@ -127,9 +133,26 @@ export class ScheduleSyncService {
         console.log(`${label} Без изменений.`);
       }
     } catch (err: unknown) {
-      console.error(`${label} Ошибка синхронизации:`, err);
       const msg = err instanceof Error ? err.message : String(err);
-      const isToken = msg.includes('401') || msg.includes('403') ||
+      const is401 = msg.includes('401');
+
+      if (is401 && !_retried && this.tokenRefresher) {
+        console.log(`${label} Токен истёк (401), перевыпускаем...`);
+        try {
+          this.modeus = await this.tokenRefresher();
+          console.log(`${label} Токен обновлён, повторяем синхронизацию.`);
+          await this.syncOne(sub, true);
+          return;
+        } catch (refreshErr: unknown) {
+          const refreshMsg = refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
+          console.error(`${label} Не удалось обновить токен:`, refreshErr);
+          this.onError?.(`🔑 *Не удалось обновить токен Modeus*\n${label}: \`${refreshMsg}\``);
+          return;
+        }
+      }
+
+      console.error(`${label} Ошибка синхронизации:`, err);
+      const isToken = is401 || msg.includes('403') ||
                       msg.toLowerCase().includes('токен') ||
                       msg.toLowerCase().includes('token');
       this.onError?.(

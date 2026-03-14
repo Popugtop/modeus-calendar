@@ -57,9 +57,15 @@ async function createModeusService(): Promise<ModeusService> {
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const modeus = await createModeusService();
-  const repo   = new CalendarRepository(DB_PATH, INTERNAL_SECRET);
-  const sync   = new ScheduleSyncService(modeus, repo);
+  let modeus = await createModeusService();
+  const repo  = new CalendarRepository(DB_PATH, INTERNAL_SECRET);
+  const sync  = new ScheduleSyncService(modeus, repo);
+
+  sync.setTokenRefresher(async () => {
+    console.log('[Auth] Обновляем токен Modeus...');
+    modeus = await createModeusService();
+    return modeus;
+  });
 
   // Forward sync errors to Telegram admin
   sync.setErrorHandler(msg => void notifyAdmin(msg));
