@@ -1,5 +1,14 @@
 import 'dotenv/config';
 import * as readline from 'readline';
+
+// Patch console to prepend timestamp
+for (const level of ['log', 'error', 'warn', 'info', 'debug'] as const) {
+  const orig = console[level].bind(console);
+  (console as unknown as Record<string, (...a: unknown[]) => void>)[level] = (...args: unknown[]) => {
+    const ts = new Date().toLocaleString('ru-RU', { hour12: false });
+    orig(`[${ts}]`, ...args);
+  };
+}
 import { ModeusAuthService } from './auth/ModeusAuthService';
 import { ModeusService } from './api/ModeusService';
 import { loadTokens, saveTokens } from './auth/tokenCache';
