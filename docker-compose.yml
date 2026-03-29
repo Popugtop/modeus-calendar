@@ -32,6 +32,7 @@ services:
       # PUBLIC_URL is read from .env (set it to your public domain)
     volumes:
       - calendar-data:/app/data
+      - ./bot/backups:/app/data/backups
     depends_on:
       - backend
     networks:

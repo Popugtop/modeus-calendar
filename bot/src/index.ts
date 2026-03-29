@@ -1,5 +1,7 @@
 import 'dotenv/config';
-import { createReadStream } from 'fs';
+import { createReadStream, writeFileSync, unlinkSync } from 'fs';
+import { tmpdir } from 'os';
+import { join as pathJoin } from 'path';
 import { Telegraf, Markup } from 'telegraf';
 import cron from 'node-cron';
 import { BotRepository } from './db';
@@ -88,6 +90,7 @@ function backupMenu() {
     [Markup.button.callback('💾 Создать и отправить бэкап', 'backup_create')],
     [Markup.button.callback('📋 Список бэкапов',            'backup_list_p_0')],
     [Markup.button.callback('♻️ Восстановить из бэкапа',    'backup_list_p_0_restore')],
+    [Markup.button.callback('📤 Загрузить файл для восстановления', 'backup_upload')],
     [Markup.button.callback('⏱️ Интервал автобэкапов',      'backup_int')],
     [Markup.button.callback('◀️ Назад',                     'back_main')],
   ]);
@@ -670,6 +673,64 @@ bot.action(/^backup_del_(.+)$/, async ctx => {
     parse_mode: 'Markdown',
     ...Markup.inlineKeyboard([[Markup.button.callback('📋 К списку', 'backup_list_p_0')]]),
   });
+});
+
+// ─── Upload file to restore ───────────────────────────────────────────────────
+
+bot.action('backup_upload', async ctx => {
+  await ctx.answerCbQuery();
+  userState.set(ctx.from!.id, { action: 'awaiting_restore_file' });
+  await ctx.editMessageText(
+    '📤 *Восстановление из файла*\n\nОтправьте `.db` файл бэкапа в этот чат.\n\n_Отправка любого другого сообщения отменит операцию._',
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([[Markup.button.callback('❌ Отмена', 'backup_menu')]]),
+    },
+  );
+});
+
+bot.on('document', async ctx => {
+  if (!isAdmin(ctx.from.id)) return;
+  const state = userState.get(ctx.from.id);
+  if (state?.action !== 'awaiting_restore_file') return;
+  userState.delete(ctx.from.id);
+
+  const doc = ctx.message.document;
+  if (!doc.file_name?.endsWith('.db')) {
+    await ctx.reply('❌ Нужен файл с расширением `.db`.', { parse_mode: 'Markdown', ...backupMenu() });
+    return;
+  }
+
+  const statusMsg = await ctx.reply('⏳ Скачиваем файл...');
+  try {
+    const fileLink = await ctx.telegram.getFileLink(doc.file_id);
+    const res      = await fetch(fileLink.href);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf      = Buffer.from(await res.arrayBuffer());
+    const tmpPath  = pathJoin(tmpdir(), `restore_${Date.now()}.db`);
+    writeFileSync(tmpPath, buf);
+
+    await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, '⏳ Восстанавливаем данные...');
+
+    try {
+      await backup.restoreFromPath(tmpPath);
+    } finally {
+      try { unlinkSync(tmpPath); } catch { /* ignore */ }
+    }
+
+    await ctx.telegram.editMessageText(
+      ctx.chat.id, statusMsg.message_id, undefined,
+      `✅ *Восстановление завершено*\n\nИсточник: \`${doc.file_name}\`\n\nПерезапустите backend: \`docker compose restart backend\``,
+      { parse_mode: 'Markdown' },
+    );
+    setTimeout(() => process.exit(0), 1500);
+  } catch (err: unknown) {
+    await ctx.telegram.editMessageText(
+      ctx.chat.id, statusMsg.message_id, undefined,
+      `❌ Ошибка восстановления: ${String(err)}`,
+    );
+    await ctx.reply('Возврат в меню бэкапов.', backupMenu());
+  }
 });
 
 // ─── Backup interval settings ─────────────────────────────────────────────────

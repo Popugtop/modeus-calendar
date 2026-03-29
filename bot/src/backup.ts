@@ -61,18 +61,23 @@ export class BackupService {
       .sort((a, b) => b.date.getTime() - a.date.getTime());
   }
 
-  /** Restores the main DB from a backup file. */
+  /** Restores the main DB from a backup file in backupDir. */
   async restore(filename: string): Promise<void> {
     const src = path.join(this.backupDir, filename);
     if (!existsSync(src)) throw new Error(`Файл не найден: ${filename}`);
+    await this.restoreFromPath(src);
+    console.log(`[Backup] Восстановлен из: ${filename}`);
+  }
 
+  /** Restores the main DB from an arbitrary file path. */
+  async restoreFromPath(src: string): Promise<void> {
+    if (!existsSync(src)) throw new Error(`Файл не найден: ${src}`);
     const backupDb = new Database(src, { readonly: true });
     try {
       await backupDb.backup(this.dbPath);
     } finally {
       backupDb.close();
     }
-    console.log(`[Backup] Восстановлен из: ${filename}`);
   }
 
   delete(filename: string): boolean {
