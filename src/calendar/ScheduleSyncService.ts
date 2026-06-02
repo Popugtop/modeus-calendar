@@ -188,9 +188,10 @@ export class ScheduleSyncService {
 
     const emb = schedule._embedded;
 
-    const events = (emb?.events ?? []).sort(
-      (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime(),
-    );
+    const events = (emb?.events ?? []).sort((a, b) => {
+      const byStart = new Date(a.start).getTime() - new Date(b.start).getTime();
+      return byStart || a.id.localeCompare(b.id);
+    });
 
     // ── Build course-unit-realization ID → name map ──────────────────────────
     const courseMap = new Map<string, string>();
@@ -266,6 +267,11 @@ export class ScheduleSyncService {
       const fullName = personId ? (personMap.get(personId) ?? '') : '';
       if (!attendeesMap.has(eventId)) attendeesMap.set(eventId, []);
       attendeesMap.get(eventId)!.push({ roleId, fullName });
+    }
+    for (const attendees of attendeesMap.values()) {
+      attendees.sort((a, b) =>
+        a.roleId.localeCompare(b.roleId) || a.fullName.localeCompare(b.fullName),
+      );
     }
 
     // ── Assemble enriched events ──────────────────────────────────────────────

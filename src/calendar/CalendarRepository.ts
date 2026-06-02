@@ -84,7 +84,7 @@ export class CalendarRepository {
         event_id    TEXT    PRIMARY KEY,
         sequence    INTEGER NOT NULL DEFAULT 0,
         event_hash  TEXT    NOT NULL,
-        updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+        updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       );
     `);
 
@@ -221,11 +221,13 @@ export class CalendarRepository {
     );
     const insert = this.db.prepare(
       `INSERT INTO event_sequences (event_id, sequence, event_hash, updated_at)
-       VALUES (?, 0, ?, datetime('now'))`,
+       VALUES (?, 0, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
     );
     const update = this.db.prepare(
       `UPDATE event_sequences
-       SET sequence = sequence + 1, event_hash = ?, updated_at = datetime('now')
+       SET sequence = sequence + 1,
+           event_hash = ?,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        WHERE event_id = ?`,
     );
 
@@ -235,15 +237,20 @@ export class CalendarRepository {
 
         if (!existing) {
           insert.run(eventId, hash);
-          result.set(eventId, { sequence: 0, updatedAt: new Date().toISOString() });
+          result.set(eventId, readSequence(eventId));
         } else if (existing.event_hash !== hash) {
           update.run(hash, eventId);
-          result.set(eventId, { sequence: existing.sequence + 1, updatedAt: new Date().toISOString() });
+          result.set(eventId, readSequence(eventId));
         } else {
           result.set(eventId, { sequence: existing.sequence, updatedAt: existing.updated_at });
         }
       }
     });
+
+    const readSequence = (eventId: string): { sequence: number; updatedAt: string } => {
+      const row = select.get(eventId)!;
+      return { sequence: row.sequence, updatedAt: row.updated_at };
+    };
 
     process();
     return result;
