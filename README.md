@@ -187,7 +187,11 @@ First: Иван
 
 ## Подключение к Caddy
 
-Если на сервере уже работает Caddy, добавь один блок в `Caddyfile`:
+Фронтенд слушает только `127.0.0.1:3000`, наружу его отдаёт Caddy с автоматическим HTTPS.
+
+### Вариант 1 — Caddy уже установлен на сервере
+
+Добавь блок в `/etc/caddy/Caddyfile` и перезагрузи конфиг:
 
 ```
 your-domain.com {
@@ -195,15 +199,53 @@ your-domain.com {
 }
 ```
 
-Перезагрузи конфиг:
-
 ```bash
 systemctl reload caddy
-# или:
-caddy reload --config /etc/caddy/Caddyfile
 ```
 
-SSL-сертификат выпустится автоматически. Больше ничего не нужно.
+### Вариант 2 — Caddy в Docker (`/opt/caddy`)
+
+Отдельный compose-проект, не зависит от этого репозитория. Может обслуживать несколько сайтов на одном сервере.
+
+```bash
+mkdir -p /opt/caddy && cd /opt/caddy
+```
+
+`/opt/caddy/docker-compose.yml`:
+
+```yaml
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    network_mode: host   # чтобы видеть 127.0.0.1:3000 на хосте
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data:/data       # сертификаты — не удалять
+      - ./config:/config
+```
+
+`/opt/caddy/Caddyfile`:
+
+```
+your-domain.com {
+    encode gzip zstd
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Запуск и перезагрузка конфига:
+
+```bash
+docker compose up -d
+docker compose logs -f caddy          # ждём "certificate obtained successfully"
+docker compose exec -w /etc/caddy caddy caddy reload   # после правки Caddyfile
+```
+
+Требования:
+- A-запись домена указывает на сервер — иначе сертификат не выпустится (Caddy будет повторять попытки сам).
+- Открыты порты 80 и 443 (`ufw allow 80 && ufw allow 443`), и их не занимает другой веб-сервер (nginx/системный Caddy).
+- `your-domain.com` совпадает с хостом из `PUBLIC_URL` в `.env`.
 
 ---
 
